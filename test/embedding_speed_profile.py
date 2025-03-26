@@ -1,17 +1,16 @@
 import torch
-from embedding_offload.embedding import SparseEmbedding
+from embedding_offload.embedding_adamw import SparseEmbedding
 
 if __name__ == "__main__":
-    embed = SparseEmbedding(1000, 1024)
-    input_tensor = torch.randint(0, 1000, (10, 128))
-    optimizer_params = {
+    embed = SparseEmbedding(1000, 1024, optimizer_params = {
                 "lr": 0.001,
                 "beta1": 0.9,
                 "beta2": 0.999,
                 "weight_decay": 0.0001,
                 "eps": 1e-8,
-                "optim_device": "cuda",
-            }
+            })
+    input_tensor = torch.randint(0, 1000, (10, 128))
+    
     with torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,
@@ -29,5 +28,5 @@ if __name__ == "__main__":
         for _ in range(10):
             out = embed(input_tensor)
             out.sum().backward()
-            embed.apply_gradients(**optimizer_params)
+            embed.apply_gradients()
             profiler.step()

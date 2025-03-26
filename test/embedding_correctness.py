@@ -1,6 +1,7 @@
 import torch
 import numpy as np
-from embedding_offload.embedding import SparseEmbedding
+# from embedding_offload.embedding import SparseEmbedding
+from embedding_offload.embedding_adamw import SparseEmbedding
 def test_simple_classification(vocab_size=1000, embed_dim=50, num_classes=5):
     """
     使用嵌入层构建简单文本分类模型，测试是否能达到相似的训练效果
@@ -24,7 +25,13 @@ def test_simple_classification(vocab_size=1000, embed_dim=50, num_classes=5):
     class OffloadedEmbeddingClassifier(torch.nn.Module):
         def __init__(self, vocab_size, embed_dim, num_classes, device):
             super().__init__()
-            self.embedding = SparseEmbedding(vocab_size, embed_dim)
+            self.embedding = SparseEmbedding(vocab_size, embed_dim, optimizer_params = {
+                "lr": 0.001,
+                "beta1": 0.9,
+                "beta2": 0.999,
+                "weight_decay": 0.0001,
+                "eps": 1e-8,
+            })
             self.fc = torch.nn.Linear(embed_dim, num_classes).to(device)
             
         def forward(self, x):
@@ -70,15 +77,7 @@ def test_simple_classification(vocab_size=1000, embed_dim=50, num_classes=5):
             loss = criterion(outputs, batch_labels)
             loss.backward()
             off_optimizer.step()
-            optimizer_params = {
-                "lr": 0.001,
-                "beta1": 0.9,
-                "beta2": 0.999,
-                "weight_decay": 0.0001,
-                "eps": 1e-8,
-                "optim_device": "cuda",
-            }
-            off_model.embedding.apply_gradients(**optimizer_params)
+            off_model.embedding.apply_gradients()
             
             # 计算准确率
             _, predicted = torch.max(outputs, 1)
