@@ -8,6 +8,7 @@ class SparseEmbedding(nn.Module):
                  optimizer_params: dict,
                  device: str = "cpu",
                  optim_device: str = "cpu",
+                 output_dtype: torch.dtype = torch.float32
                  ):
         super().__init__()
         self.num_embeddings = num_embeddings
@@ -15,7 +16,7 @@ class SparseEmbedding(nn.Module):
         self.optimizer_params = optimizer_params
         self.device = device
         self.optim_device = optim_device
-        
+        self.output_dtype = output_dtype
         # 初始化权重在CPU上
         self.weight = torch.empty((num_embeddings, embedding_dim), device=device, pin_memory=True)
         nn.init.normal_(self.weight)
@@ -28,18 +29,17 @@ class SparseEmbedding(nn.Module):
     def forward(self, indices: torch.Tensor) -> torch.Tensor:
         self.indices = indices.to(self.device).view(-1)
         output_shape = indices.shape + (self.embedding_dim,)
-        self.output = self.weight[self.indices].to(indices.device).detach().requires_grad_(True)
+        self.output = self.weight[self.indices].to(device=indices.device, dtype=self.output_dtype).detach().requires_grad_(True)
         return self.output.view(output_shape)
 
     def apply_gradients(self):
         with torch.no_grad():
             
             unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
-            unique_indices = unique_indices.to(self.optim_device, dtype=torch.long)
-            
-            _grad = self.output.grad.to(self.optim_device, non_blocking=True)
-            grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=self.optim_device)
-            grad.index_add_(0, inverse, _grad)
+
+            grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=self.output.grad.device, dtype=self.output.grad.dtype)
+            grad.index_add_(0, inverse.to(self.output.grad.device), self.output.grad)
+            grad = grad.to(self.optim_device, dtype=torch.float32, non_blocking=True)
             param = self.weight[unique_indices].to(self.optim_device, non_blocking=True)
             exp_avg = self.exp_avgs[unique_indices].to(self.optim_device, non_blocking=True)
             exp_avg_sq = self.exp_avg_sqs[unique_indices].to(self.optim_device, non_blocking=True)
@@ -80,7 +80,8 @@ if __name__ == "__main__":
         "beta2": 0.999,
         "weight_decay": 0.01,
         "eps": 1e-8,
-    })
+    },
+    output_dtype=torch.float16,)
     
     
     # 模拟训练步骤

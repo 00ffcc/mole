@@ -1,8 +1,8 @@
+import time
 import torch
-import numpy as np
 # from embedding_offload.embedding import SparseEmbedding
 from embedding_offload.embedding_adamw import SparseEmbedding
-def test_simple_classification(vocab_size=1000, embed_dim=50, num_classes=5):
+def test_simple_classification(vocab_size=10000, embed_dim=500, num_classes=5):
     """
     使用嵌入层构建简单文本分类模型，测试是否能达到相似的训练效果
     """
@@ -31,7 +31,8 @@ def test_simple_classification(vocab_size=1000, embed_dim=50, num_classes=5):
                 "beta2": 0.999,
                 "weight_decay": 0.0001,
                 "eps": 1e-8,
-            })
+            },
+            optim_device='cpu')
             self.fc = torch.nn.Linear(embed_dim, num_classes).to(device)
             
         def forward(self, x):
@@ -58,6 +59,9 @@ def test_simple_classification(vocab_size=1000, embed_dim=50, num_classes=5):
         print(f"{name}: {param.size()}")
     off_optimizer = torch.optim.AdamW(off_model.parameters(), lr=0.001, weight_decay=0.0001)
     print("Training Offloaded Model...")
+    torch.cuda.synchronize()
+    time_start = time.time()
+
     for epoch in range(epochs):
         epoch_loss = 0
         correct = 0
@@ -86,12 +90,17 @@ def test_simple_classification(vocab_size=1000, embed_dim=50, num_classes=5):
         
         accuracy = 100.0 * correct / num_samples
         print(f"Epoch {epoch+1}, Loss: {epoch_loss:.4f}, Accuracy: {accuracy:.2f}%")
+    torch.cuda.synchronize()
+    time_end = time.time()
+    print(f"Training Time: {time_end - time_start:.2f}s")
     del off_model, off_optimizer
     
 
     std_model = StandardEmbeddingClassifier(vocab_size, embed_dim, num_classes).to(device)
     std_optimizer = torch.optim.AdamW(std_model.parameters(), lr=0.001, weight_decay=0.0001)
     print("Training Standard Model...")
+    torch.cuda.synchronize()
+    time_start = time.time()
     for epoch in range(epochs):
         epoch_loss = 0
         correct = 0
@@ -120,7 +129,9 @@ def test_simple_classification(vocab_size=1000, embed_dim=50, num_classes=5):
         
         accuracy = 100.0 * correct / num_samples
         print(f"Epoch {epoch+1}, Loss: {epoch_loss:.4f}, Accuracy: {accuracy:.2f}%")
-
+    torch.cuda.synchronize()
+    time_end = time.time()
+    print(f"Training Time: {time_end - time_start:.2f}s")
     del std_model, std_optimizer
     
 if __name__ == "__main__":

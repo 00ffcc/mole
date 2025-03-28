@@ -2,14 +2,14 @@ import torch
 from embedding_offload.embedding_adamw import SparseEmbedding
 
 if __name__ == "__main__":
-    embed = SparseEmbedding(1000, 1024, optimizer_params = {
+    embed = SparseEmbedding(1000, 10240, optimizer_params = {
                 "lr": 0.001,
                 "beta1": 0.9,
                 "beta2": 0.999,
                 "weight_decay": 0.0001,
                 "eps": 1e-8,
             })
-    input_tensor = torch.randint(0, 1000, (10, 128))
+    input_tensor = torch.randint(0, 1000, (10, 128), device="cuda")
     
     with torch.profiler.profile(
             activities=[
