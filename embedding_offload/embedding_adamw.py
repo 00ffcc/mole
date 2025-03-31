@@ -29,16 +29,16 @@ class SparseEmbedding(nn.Module):
     def forward(self, indices: torch.Tensor) -> torch.Tensor:
         self.indices = indices.to(self.device).view(-1)
         output_shape = indices.shape + (self.embedding_dim,)
-        self.output = self.weight[self.indices].to(device=indices.device, dtype=self.output_dtype).detach().requires_grad_(True)
-        return self.output.view(output_shape)
+        output = self.weight[self.indices].to(device=indices.device, dtype=self.output_dtype).detach()
+        return output.view(output_shape)
 
-    def apply_gradients(self):
+    def apply_gradients(self, output_grad: torch.Tensor = None):
         with torch.no_grad():
-            
+            output_grad = output_grad.view(-1, self.embedding_dim)
             unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
 
-            grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=self.output.grad.device, dtype=self.output.grad.dtype)
-            grad.index_add_(0, inverse.to(self.output.grad.device), self.output.grad)
+            grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=output_grad.dtype)
+            grad.index_add_(0, inverse.to(output_grad.device), output_grad)
             grad = grad.to(self.optim_device, dtype=torch.float32, non_blocking=True)
             param = self.weight[unique_indices].to(self.optim_device, non_blocking=True)
             exp_avg = self.exp_avgs[unique_indices].to(self.optim_device, non_blocking=True)
@@ -66,7 +66,6 @@ class SparseEmbedding(nn.Module):
             self.exp_avgs[unique_indices] = exp_avg.to(self.device, non_blocking=True)
             self.exp_avg_sqs[unique_indices] = exp_avg_sq.to(self.device, non_blocking=True)
 
-            del self.output
 
 
 

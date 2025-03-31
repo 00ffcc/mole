@@ -10,7 +10,7 @@ dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
 profile_kwargs = ProfileKwargs(
     activities=["cpu", "cuda"],
-    output_trace_dir="log"
+    output_trace_dir="log/send"
 )
 accelerator = Accelerator(kwargs_handlers=[profile_kwargs])
 
@@ -20,12 +20,13 @@ def run_send_recv(rank):
     src_rank = 0
     dst_rank = 1
 
-    tensor_shape = (2000, 3000)
+    tensor_shape = (2048, 16000)
     tensor_dtype = torch.float32
 
     if rank == src_rank:
         # --- Source Process (Rank 0) ---
         tensor_to_send = torch.randint(0, 10000, tensor_shape, dtype=tensor_dtype)
+        # tensor_to_send.share_memory_()
         print(f"Rank {rank} (src): Preparing to send tensor")
         print(f"Rank {rank} (src): Tensor device: {tensor_to_send.device}")
 
@@ -42,6 +43,7 @@ def run_send_recv(rank):
 
         # Receive the tensor from the source rank. This blocks until data arrives.
         dist.recv(tensor=received_tensor, src=src_rank)
+        received_tensor.to(accelerator.device)
         print(f"Rank {rank} (dst): Tensor received from rank {src_rank}")
         print(f"Rank {rank} (dst): Received tensor device: {received_tensor.device}")
 
