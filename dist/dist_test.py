@@ -47,8 +47,17 @@ with accelerator.profile() as prof:
         dist.scatter(out, scatter_list, src=0)
         # out = [None]
         # dist.scatter_object_list(out, scatter_list, src=0) # 太慢了
-        # embed = out[0].to(accelerator.device)
+        # out = out[0].to(accelerator.device)
 
+        out.requires_grad_(True)
+        out.retain_grad()
+        loss = out.sum()
+        loss.backward()
+        if accelerator.is_local_main_process:
+            # print(out.grad)
+            print(embedding.weight.grad)
+            # torch.distributed.
+        dist.barrier()
         prof.step()
         # profiler.export_chrome_trace('/NAS/wujunkang/guizhiyu/mole/dist/trace.json')  # 保存日志以供 Chrome Tracing 可视化
 
