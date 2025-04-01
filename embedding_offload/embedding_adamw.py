@@ -8,7 +8,8 @@ class SparseEmbedding(nn.Module):
                  optimizer_params: dict,
                  device: str = "cpu",
                  optim_device: str = "cpu",
-                 output_dtype: torch.dtype = torch.float32
+                 output_dtype: torch.dtype = torch.float32,
+                 std: float = 0.01,
                  ):
         super().__init__()
         self.num_embeddings = num_embeddings
@@ -19,7 +20,7 @@ class SparseEmbedding(nn.Module):
         self.output_dtype = output_dtype
         # 初始化权重在CPU上
         self.weight = torch.empty((num_embeddings, embedding_dim), device=device, pin_memory=True)
-        nn.init.normal_(self.weight)
+        nn.init.normal_(self.weight, std=std)
         
         self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
         self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)

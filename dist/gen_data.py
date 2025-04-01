@@ -4,7 +4,7 @@ import torch
 
 vocab_size = 10000
 category_size = 10
-num_samples = 16
+num_samples = 1600
 
 proj = torch.randint(1, category_size, (vocab_size,))
 

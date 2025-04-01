@@ -2,7 +2,6 @@ from accelerate import Accelerator, ProfileKwargs
 from matplotlib import category
 import torch.distributed as dist
 import torch
-from embedding_offload.embedding_adamw import SparseEmbedding
 import contextlib
 
 profile_kwargs = ProfileKwargs(
@@ -18,9 +17,10 @@ category_size = 100
 class classifier(torch.nn.Module):
     def __init__(self, n, dim_embed):
         super().__init__()
+        self.embedding = torch.nn.Embedding(vocab_size, dim_embed)
         self.fc = torch.nn.Linear(dim_embed, n)
-    def forward(self, embed):
-        return self.fc(embed)
+    def forward(self, x):
+        return self.fc(self.embedding(x))
 
 model = classifier(category_size, dim_embed)
 
@@ -43,36 +43,13 @@ criterion = torch.nn.CrossEntropyLoss()
 
 dataloader, model, optimizer = accelerator.prepare(dataloader, model, optimizer)
 
-if accelerator.is_local_main_process:
-    embedding = SparseEmbedding(vocab_size, dim_embed, optimizer_params = {
-                "lr": 0.001,
-                "beta1": 0.9,
-                "beta2": 0.999,
-                "weight_decay": 0.0001,
-                "eps": 1e-8,
-            })
+
 is_profile = False
 with accelerator.profile() if is_profile else contextlib.suppress() as prof:
-    for epoch in range(100):
+    for epoch in range(10):
         losss = []
         for i, (index, category) in enumerate(dataloader):
-
-            gather_list = [torch.empty_like(index) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
-            dist.gather(index, gather_list, dst=0)
-            if accelerator.is_local_main_process:
-                indexs = torch.stack(gather_list, dim=0)
-                embeds = embedding(indexs)
-                scatter_list = [embeds[_] for _ in range(embeds.shape[0])]
-            else:
-                scatter_list = None
-
-            embed = torch.empty(index.shape + (dim_embed,), device=accelerator.device)
-            dist.scatter(embed, scatter_list, src=0)
-   
-            embed.requires_grad_(True)
-            embed.retain_grad()
-
-            out = model(embed)
+            out = model(index)
             loss = criterion(out, category)
             losss.append(loss.item())
             
@@ -80,11 +57,6 @@ with accelerator.profile() if is_profile else contextlib.suppress() as prof:
             loss.backward()
             optimizer.step()
 
-            gather_list = [torch.empty_like(embed.grad) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
-            dist.gather(embed.grad, gather_list, dst=0)
-            if accelerator.is_local_main_process:
-                grad = torch.cat(gather_list, dim=0)
-                embedding.apply_gradients(grad)
             # dist.barrier()
             # prof.step()
         print(f"epoch {epoch}, loss {sum(losss)/len(losss)}")
