@@ -30,3 +30,4 @@ coling_latex.*
 work_dirs
 log
 *.egg-info
+data.json
