@@ -32,40 +32,40 @@ class SparseEmbedding(nn.Module):
         output_shape = indices.shape + (self.embedding_dim,)
         output = self.weight[self.indices].to(device=indices.device, dtype=self.output_dtype).detach()
         return output.view(output_shape)
+    @torch.no_grad()
+    def apply_gradients(self, output_grad: torch.Tensor = None, lr: float = None):
+        output_grad = output_grad.view(-1, self.embedding_dim)
+        unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
 
-    def apply_gradients(self, output_grad: torch.Tensor = None):
-        with torch.no_grad():
-            output_grad = output_grad.view(-1, self.embedding_dim)
-            unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
+        grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=output_grad.dtype)
+        grad.index_add_(0, inverse.to(output_grad.device), output_grad)
+        grad = grad.to(self.optim_device, dtype=torch.float32, non_blocking=True)
+        param = self.weight[unique_indices].to(self.optim_device, non_blocking=True)
+        exp_avg = self.exp_avgs[unique_indices].to(self.optim_device, non_blocking=True)
+        exp_avg_sq = self.exp_avg_sqs[unique_indices].to(self.optim_device, non_blocking=True)
 
-            grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=output_grad.dtype)
-            grad.index_add_(0, inverse.to(output_grad.device), output_grad)
-            grad = grad.to(self.optim_device, dtype=torch.float32, non_blocking=True)
-            param = self.weight[unique_indices].to(self.optim_device, non_blocking=True)
-            exp_avg = self.exp_avgs[unique_indices].to(self.optim_device, non_blocking=True)
-            exp_avg_sq = self.exp_avg_sqs[unique_indices].to(self.optim_device, non_blocking=True)
+        # calc
 
-            # calc
+        self.state_steps += 1
+        lr = lr or self.optimizer_params["lr"]
+        beta1, beta2, weight_decay, eps = self.optimizer_params["beta1"], self.optimizer_params["beta2"], self.optimizer_params["weight_decay"], self.optimizer_params["eps"]
 
-            self.state_steps += 1
-            lr, beta1, beta2, weight_decay, eps = self.optimizer_params["lr"], self.optimizer_params["beta1"], self.optimizer_params["beta2"], self.optimizer_params["weight_decay"], self.optimizer_params["eps"]
+        param.mul_(1 - lr * weight_decay)
+        exp_avg.lerp_(grad, 1 - beta1)
+        exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
-            param.mul_(1 - lr * weight_decay)
-            exp_avg.lerp_(grad, 1 - beta1)
-            exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+        bias_correction1 = 1 - beta1**self.state_steps
+        bias_correction2 = 1 - beta2**self.state_steps
 
-            bias_correction1 = 1 - beta1**self.state_steps
-            bias_correction2 = 1 - beta2**self.state_steps
+        step_size_neg = - lr / bias_correction1
 
-            step_size_neg = - lr / bias_correction1
+        denom = (exp_avg_sq.sqrt() / (sqrt(bias_correction2) * step_size_neg)).add_(eps / step_size_neg)
+        param.addcdiv_(exp_avg, denom)
 
-            denom = (exp_avg_sq.sqrt() / (sqrt(bias_correction2) * step_size_neg)).add_(eps / step_size_neg)
-            param.addcdiv_(exp_avg, denom)
-
-            # write back
-            self.weight[unique_indices] = param.to(self.device, non_blocking=True)
-            self.exp_avgs[unique_indices] = exp_avg.to(self.device, non_blocking=True)
-            self.exp_avg_sqs[unique_indices] = exp_avg_sq.to(self.device, non_blocking=True)
+        # write back
+        self.weight[unique_indices] = param.to(self.device, non_blocking=True)
+        self.exp_avgs[unique_indices] = exp_avg.to(self.device, non_blocking=True)
+        self.exp_avg_sqs[unique_indices] = exp_avg_sq.to(self.device, non_blocking=True)
 
 
 

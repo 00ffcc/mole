@@ -31,3 +31,4 @@ work_dirs
 log
 *.egg-info
 data.json
+*.jsonl

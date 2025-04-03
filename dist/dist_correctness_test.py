@@ -68,6 +68,8 @@ with accelerator.profile() if is_profile else contextlib.suppress() as prof:
 
             embed = torch.empty(index.shape + (dim_embed,), device=accelerator.device)
             dist.scatter(embed, scatter_list, src=0)
+            if accelerator.is_local_main_process:
+                del embeds, indexs, gather_list, scatter_list
    
             embed.requires_grad_(True)
             embed.retain_grad()
