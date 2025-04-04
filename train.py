@@ -4,7 +4,6 @@ import torch
 from mole.embedding_offload.embedding_adamw import SparseEmbedding
 from contextlib import nullcontext, contextmanager
 from codetiming import Timer
-from typing import Dict
 from torch.utils.data import DataLoader
 import json
 import os
@@ -14,7 +13,7 @@ from mole.lm.dataset import PretrainDataset
 from transformers import AutoTokenizer
 
 @contextmanager
-def _timer(name: str, timing_raw: Dict[str, float]):
+def _timer(name: str, timing_raw):
     with Timer(name=name, logger=None) as timer:
         yield
     timing_raw[name] = timer.last

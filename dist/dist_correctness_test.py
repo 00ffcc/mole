@@ -2,7 +2,7 @@ from accelerate import Accelerator, ProfileKwargs
 from matplotlib import category
 import torch.distributed as dist
 import torch
-from embedding_offload.embedding_adamw import SparseEmbedding
+from mole.embedding_offload.embedding_adamw import SparseEmbedding
 import contextlib
 
 profile_kwargs = ProfileKwargs(
