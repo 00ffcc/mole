@@ -25,5 +25,6 @@
     "tokenizer_path": "jingyaogong/MiniMind2",
     "max_length": 512,
     "batch_size": 16,
-    "warmup_steps": 300
+    "warmup_steps": 300,
+    "checkpoint_steps": 1000
 }

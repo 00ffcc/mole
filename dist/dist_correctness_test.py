@@ -44,8 +44,8 @@ criterion = torch.nn.CrossEntropyLoss()
 dataloader, model, optimizer = accelerator.prepare(dataloader, model, optimizer)
 
 if accelerator.is_local_main_process:
+    # 要先运行一次用了CUDA的程序，才能用pin_memory...
     embedding = SparseEmbedding(vocab_size, dim_embed, optimizer_params = {
-                "lr": 0.001,
                 "beta1": 0.9,
                 "beta2": 0.999,
                 "weight_decay": 0.0001,
@@ -53,7 +53,7 @@ if accelerator.is_local_main_process:
             })
 is_profile = False
 with accelerator.profile() if is_profile else contextlib.suppress() as prof:
-    for epoch in range(100):
+    for epoch in range(1):
         losss = []
         for i, (index, category) in enumerate(dataloader):
 
@@ -86,7 +86,19 @@ with accelerator.profile() if is_profile else contextlib.suppress() as prof:
             dist.gather(embed.grad, gather_list, dst=0)
             if accelerator.is_local_main_process:
                 grad = torch.cat(gather_list, dim=0)
-                embedding.apply_gradients(grad)
+                embedding.apply_gradients(output_grad = grad, lr = 0.001)
             # dist.barrier()
             # prof.step()
         print(f"epoch {epoch}, loss {sum(losss)/len(losss)}")
+
+if accelerator.is_local_main_process:
+    unwarpped_model = accelerator.unwrap_model(model)
+    model_state_dict = unwarpped_model.state_dict()
+    embedding_state_dict = embedding.state_dict() if dim_embed > 0 else {}
+    state_dict = {
+        **model_state_dict,
+        **embedding_state_dict,
+    }
+    print(state_dict.keys())
+    # os.makedirs(f"/{pwd}/{name}", exist_ok=True)
+    torch.save(state_dict, f"checkpoint_test.pt")

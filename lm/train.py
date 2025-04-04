@@ -1,15 +1,23 @@
 from accelerate import Accelerator, ProfileKwargs
 import torch.distributed as dist
 import torch
-from embedding_offload.embedding_adamw import SparseEmbedding
-from contextlib import nullcontext
+from mole.embedding_offload.embedding_adamw import SparseEmbedding
+from contextlib import nullcontext, contextmanager
+from codetiming import Timer
+from typing import Dict
 from torch.utils.data import DataLoader
 import json
 import os
-from .LMConfig import LMConfig
-from .model import MoLELM
-from .dataset import PretrainDataset
+from mole.lm.LMConfig import LMConfig
+from mole.lm.model import MoLELM
+from mole.lm.dataset import PretrainDataset
 from transformers import AutoTokenizer
+
+@contextmanager
+def _timer(name: str, timing_raw: Dict[str, float]):
+    with Timer(name=name, logger=None) as timer:
+        yield
+    timing_raw[name] = timer.last
 
 profile_kwargs = ProfileKwargs(
     activities=["cpu", "cuda"],
@@ -54,49 +62,67 @@ if accelerator.is_local_main_process and dim_embed > 0:
 
 with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
     for step, (x, y, mask) in enumerate(dataloader):
+        time_raw = {}
         if dim_embed > 0:
-            gather_list = [torch.empty_like(x) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
-            dist.gather(x, gather_list, dst=0)
-            if accelerator.is_local_main_process:
-                indexs = torch.stack(gather_list, dim=0)
-                embeds = embedding(indexs)
-                scatter_list = [embeds[_] for _ in range(embeds.shape[0])]
-            else:
-                scatter_list = None
+            with _timer('embedding', time_raw) if accelerator.is_local_main_process else nullcontext():
+                gather_list = [torch.empty_like(x) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
+                dist.gather(x, gather_list, dst=0)
+                if accelerator.is_local_main_process:
+                    indexs = torch.stack(gather_list, dim=0)
+                    embeds = embedding(indexs)
+                    scatter_list = [embeds[_] for _ in range(embeds.shape[0])]
+                else:
+                    scatter_list = None
 
-            embed = torch.empty(x.shape + (dim_embed,), device=accelerator.device)
-            dist.scatter(embed, scatter_list, src=0)
-            if accelerator.is_local_main_process:
-                del embeds, indexs, gather_list, scatter_list
+                embed = torch.empty(x.shape + (dim_embed,), device=accelerator.device)
+                dist.scatter(embed, scatter_list, src=0)
+                if accelerator.is_local_main_process:
+                    del embeds, indexs, gather_list, scatter_list
 
-            embed.requires_grad_(True)
-            embed.retain_grad()
+                embed.requires_grad_(True)
+                embed.retain_grad()
         else:
             embed = None
 
-        out = model(input_ids=x, embedding_input=embed)
-        logits = out.logits
-        loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1), weight=mask.view(-1))
+        with _timer('forward', time_raw) if accelerator.is_local_main_process else nullcontext():
+            out = model(input_ids=x, embedding_input=embed)
+            logits = out.logits
+            loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1), weight=mask.view(-1))
 
+        with _timer('backward_and_update', time_raw) if accelerator.is_local_main_process else nullcontext():
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+
+        if dim_embed > 0:
+            with _timer('embedding_update', time_raw) if accelerator.is_local_main_process else nullcontext():
+                gather_list = [torch.empty_like(embed.grad) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
+                dist.gather(embed.grad, gather_list, dst=0)
+                if accelerator.is_local_main_process:
+                    grad = torch.cat(gather_list, dim=0)
+                    lr = optimizer.param_groups[0]['lr']
+                    embedding.apply_gradients(output_grad = grad, lr = lr)
+        
+        if accelerator.is_local_main_process and (step + 1) % config['checkpoint_steps'] == 0:
+            unwarpped_model = accelerator.unwrap_model(model)
+            model_state_dict = unwarpped_model.state_dict()
+            embedding_state_dict = embedding.state_dict() if dim_embed > 0 else {}
+            state_dict = {
+                **model_state_dict,
+                **embedding_state_dict,
+            }
+            os.makedirs(f"/{pwd}/{name}", exist_ok=True)
+            torch.save(state_dict, f"/{pwd}/{name}/checkpoint_{step}.pt")
+        
         if accelerator.is_local_main_process:
             wandb.log({
                 'loss': loss.item(),
                 'lr': optimizer.param_groups[0]['lr'],
                 }, step=step)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-
-        if dim_embed > 0:
-            gather_list = [torch.empty_like(embed.grad) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
-            dist.gather(embed.grad, gather_list, dst=0)
-            if accelerator.is_local_main_process:
-                grad = torch.cat(gather_list, dim=0)
-                lr = optimizer.param_groups[0]['lr']
-                embedding.apply_gradients(grad=grad, lr=lr)
-
+            for k, v in time_raw.items():
+                wandb.log({f'timing/{k}': v}, step=step)
+        
         if step < config['warmup_steps']:
             warmup_scheduler.step()
         else:
