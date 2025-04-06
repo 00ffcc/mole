@@ -27,6 +27,7 @@ accelerator = Accelerator(kwargs_handlers=[profile_kwargs])
 pwd = os.path.dirname(os.path.abspath(__file__))
 with open(f'{pwd}/config/config.json') as f:
     config = json.load(f)
+    config['max_steps'] = config['max_samples'] // config['batch_size']
 
 if accelerator.is_local_main_process:
     import wandb
@@ -39,25 +40,30 @@ model = MoLELM(lmconfig)
 
 tokenizer = AutoTokenizer.from_pretrained(config['tokenizer_path'])
 
-dataset = PretrainDataset(config['data_path'], tokenizer, max_length=config['max_length'])
+dataset = PretrainDataset(tokenizer, max_length=config['max_length'])
 dataloader = DataLoader(dataset, batch_size=config['batch_size'], shuffle=True, num_workers=4)
 
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.0001)
+optimizer = torch.optim.AdamW(model.parameters(), lr=config['max_lr'], weight_decay=config['weight_decay'])
+
 warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: epoch / config['warmup_steps'] if epoch < config['warmup_steps'] else 1.0)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=40000, T_mult=2, eta_min=0)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=config['max_steps'], T_mult=2, eta_min=0)
 criterion = torch.nn.CrossEntropyLoss(reduction='mean')
 
 dataloader, model, optimizer, scheduler, warmup_scheduler = accelerator.prepare(dataloader, model, optimizer, scheduler, warmup_scheduler)
 
 dim_embed = config['dim'] * (config['n_routed_mole_experts'] * config['n_layers'] + (1 if config['offload_tok_embbedings'] else 0))
 if accelerator.is_local_main_process and dim_embed > 0:
-    embedding = SparseEmbedding(config['vocab_size'], dim_embed, optimizer_params = {
-                "beta1": 0.9,
-                "beta2": 0.999,
-                "weight_decay": 0.0001,
-                "eps": 1e-8,
-            })
+    embedding = SparseEmbedding(
+                    config['vocab_size'], 
+                    dim_embed, 
+                    optimizer_params = {
+                        "beta1": 0.9,
+                        "beta2": 0.999,
+                        "weight_decay": config['weight_decay'],
+                        "eps": 1e-8,
+                    },
+                    std = config['embedding_init_std'])
 
 with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
     for step, (x, y, mask) in enumerate(dataloader):
@@ -103,17 +109,6 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
                     lr = optimizer.param_groups[0]['lr']
                     embedding.apply_gradients(output_grad = grad, lr = lr)
         
-        if accelerator.is_local_main_process and (step + 1) % config['checkpoint_steps'] == 0:
-            unwarpped_model = accelerator.unwrap_model(model)
-            model_state_dict = unwarpped_model.state_dict()
-            embedding_state_dict = embedding.state_dict() if dim_embed > 0 else {}
-            state_dict = {
-                **model_state_dict,
-                **embedding_state_dict,
-            }
-            os.makedirs(f"/{pwd}/{name}", exist_ok=True)
-            torch.save(state_dict, f"/{pwd}/{name}/checkpoint_{step}.pt")
-        
         if accelerator.is_local_main_process:
             wandb.log({
                 'loss': loss.item(),
@@ -126,4 +121,15 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
             warmup_scheduler.step()
         else:
             scheduler.step()
+    
+    if accelerator.is_local_main_process:
+            unwarpped_model = accelerator.unwrap_model(model)
+            model_state_dict = unwarpped_model.state_dict()
+            embedding_state_dict = embedding.state_dict() if dim_embed > 0 else {}
+            state_dict = {
+                **model_state_dict,
+                **embedding_state_dict,
+            }
+            os.makedirs(f"/{pwd}/{name}", exist_ok=True)
+            torch.save(state_dict, f"/{pwd}/{name}/checkpoint.pt")
 

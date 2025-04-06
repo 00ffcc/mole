@@ -1,46 +1,37 @@
-# from https://github.com/jingyaogong/minimind/blob/master/model/dataset.py
-import json
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset
 import torch
-import os
+from datasets import load_dataset
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-
-class PretrainDataset(Dataset):
-    def __init__(self, data_path, tokenizer, max_length=512):
+class PretrainDataset(IterableDataset):
+    def __init__(self, tokenizer, max_length=2049):
         super().__init__()
         self.tokenizer = tokenizer
+        self.tokenizer.pad_token = tokenizer.eos_token
         self.max_length = max_length
-        self.samples = self.load_data(data_path)
+        self.ds = load_dataset("pietrolesci/pile-deduped-pythia-preshuffled", "detokenized", split='train', streaming=True)
+    def __iter__(self):
+        for sample in self.ds:
+            # 构建输入文本
+            text = f"{self.tokenizer.bos_token}{str(sample['text'])}{self.tokenizer.eos_token}"
+            encoding = self.tokenizer(
+                text,
+                max_length=self.max_length,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+            input_ids = encoding.input_ids.squeeze()
+            loss_mask = encoding.attention_mask.squeeze()
 
-    def load_data(self, path):
-        samples = []
-        with open(path, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                data = json.loads(line.strip())
-                samples.append(data)
-        return samples
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, index):
-        sample = self.samples[index]
-
-        # 构建输入文本
-        text = f"{self.tokenizer.bos_token}{str(sample['text'])}{self.tokenizer.eos_token}"
-        encoding = self.tokenizer(
-            text,
-            max_length=self.max_length,
-            padding='max_length',
-            truncation=True,
-            return_tensors='pt'
-        )
-        input_ids = encoding.input_ids.squeeze()
-        loss_mask = (input_ids != self.tokenizer.pad_token_id)
-
-        X = torch.tensor(input_ids[:-1], dtype=torch.long)
-        Y = torch.tensor(input_ids[1:], dtype=torch.long)
-        loss_mask = torch.tensor(loss_mask[1:], dtype=torch.long)
-        return X, Y, loss_mask
+            yield input_ids[:-1], input_ids[1:], loss_mask[1:]
+    
+if __name__ == '__main__':
+    from transformers import AutoTokenizer
+    from torch.utils.data import DataLoader
+    tokenizer = AutoTokenizer.from_pretrained('EleutherAI/pythia-70m-deduped')
+    print(tokenizer.vocab_size)
+    ds = PretrainDataset(tokenizer=tokenizer)
+    dl = DataLoader(ds, batch_size=1, shuffle=False)
+    for batch in dl:
+        print(batch)
+        break
