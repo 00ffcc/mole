@@ -1,5 +1,4 @@
 from torch.utils.data import Dataset, IterableDataset
-import torch
 from datasets import load_dataset
 
 class PretrainDataset(IterableDataset):

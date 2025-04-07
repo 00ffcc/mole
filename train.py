@@ -11,6 +11,12 @@ from mole.lm.LMConfig import LMConfig
 from mole.lm.model import MoLELM
 from mole.lm.dataset import PretrainDataset
 from transformers import AutoTokenizer
+import argparse
+
+arf = argparse.ArgumentParser()
+arfr = arf.add_argument_group('required arguments')
+arfr.add_argument('--model_config_path', type=str, required=True, help='path to config file')
+args, _ = arf.parse_known_args()
 
 @contextmanager
 def _timer(name: str, timing_raw):
@@ -25,7 +31,7 @@ profile_kwargs = ProfileKwargs(
 accelerator = Accelerator(kwargs_handlers=[profile_kwargs])
 
 pwd = os.path.dirname(os.path.abspath(__file__))
-with open(f'{pwd}/config/config.json') as f:
+with open(os.path.join(pwd, args.model_config_path), 'r') as f:
     config = json.load(f)
     config['max_steps'] = config['max_samples'] // config['batch_size']
 
@@ -70,7 +76,10 @@ if accelerator.is_local_main_process and dim_embed > 0:
                         "weight_decay": config['weight_decay'],
                         "eps": 1e-8,
                     },
-                    std = config['embedding_init_std'])
+                    std = config['embedding_init_std'],
+                    output_dtype = torch.bfloat16)
+    config['embedding_params'] = sum(p.numel() for p in embedding.parameters())
+    wandb.config.update(config)
 
 with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
     for step, (x, y, mask) in enumerate(dataloader):
@@ -92,7 +101,7 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
                 else:
                     scatter_list = None
 
-                embed = torch.empty(x.shape + (dim_embed,), device=accelerator.device)
+                embed = torch.empty(x.shape + (dim_embed,), device=accelerator.device, dtype=torch.bfloat16)
                 dist.scatter(embed, scatter_list, src=0)
                 if accelerator.is_local_main_process:
                     del embeds, indexs, gather_list, scatter_list
