@@ -4,7 +4,7 @@ from typing import List
 
 
 class LMConfig(PretrainedConfig):
-    model_type = "minimind"
+    model_type = "mole"
 
     def __init__(
             self,
@@ -69,4 +69,6 @@ class LMConfig(PretrainedConfig):
         ####################################################
         self.n_routed_mole_experts = n_routed_mole_experts # mole专家数量
         self.offload_tok_embbedings = offload_tok_embbedings # 第一层是否要用SparseEmbedding
+        for k, v in kwargs.items():
+            setattr(self, k, v)
         super().__init__(**kwargs)

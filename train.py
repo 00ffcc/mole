@@ -41,14 +41,21 @@ model = MoLELM(lmconfig)
 tokenizer = AutoTokenizer.from_pretrained(config['tokenizer_path'])
 
 dataset = PretrainDataset(tokenizer, max_length=config['max_length'])
-dataloader = DataLoader(dataset, batch_size=config['batch_size'], shuffle=True, num_workers=4)
+dataloader = DataLoader(dataset, batch_size=config['batch_size'] // accelerator.num_processes)
 
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=config['max_lr'], weight_decay=config['weight_decay'])
 
+if accelerator.is_local_main_process:
+    # 统计参数量
+    total_params = sum(p.numel() for p in model.parameters())
+    config['total_params'] = total_params
+    config['model_params'] = {k: p.numel() for k, p in model.named_parameters()}
+    wandb.config.update(config)
+
 warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: epoch / config['warmup_steps'] if epoch < config['warmup_steps'] else 1.0)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=config['max_steps'], T_mult=2, eta_min=0)
-criterion = torch.nn.CrossEntropyLoss(reduction='mean')
+criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
 dataloader, model, optimizer, scheduler, warmup_scheduler = accelerator.prepare(dataloader, model, optimizer, scheduler, warmup_scheduler)
 
@@ -67,7 +74,13 @@ if accelerator.is_local_main_process and dim_embed > 0:
 
 with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
     for step, (x, y, mask) in enumerate(dataloader):
+        if step >= config['max_steps']:
+            break
         time_raw = {}
+        if step < config['warmup_steps']:
+            warmup_scheduler.step()
+        else:
+            scheduler.step()
         if dim_embed > 0:
             with _timer('embedding', time_raw) if accelerator.is_local_main_process else nullcontext():
                 gather_list = [torch.empty_like(x) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
@@ -92,11 +105,12 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
         with _timer('forward', time_raw) if accelerator.is_local_main_process else nullcontext():
             out = model(input_ids=x, embedding_input=embed)
             logits = out.logits
-            loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1), weight=mask.view(-1))
+            loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1)).view(y.shape)
+            loss = (loss * mask).sum() / mask.sum()
 
         with _timer('backward_and_update', time_raw) if accelerator.is_local_main_process else nullcontext():
             optimizer.zero_grad()
-            loss.backward()
+            accelerator.backward(loss)
             optimizer.step()
 
 
@@ -117,10 +131,6 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
             for k, v in time_raw.items():
                 wandb.log({f'timing/{k}': v}, step=step)
         
-        if step < config['warmup_steps']:
-            warmup_scheduler.step()
-        else:
-            scheduler.step()
     
     if accelerator.is_local_main_process:
             unwarpped_model = accelerator.unwrap_model(model)
