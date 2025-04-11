@@ -264,12 +264,14 @@ class MoLEFeedForward(nn.Module):
     def __init__(self, config: LMConfig):
         super().__init__()
         self.config = config
-        if config.n_routed_mole_experts != 0:
+        if config.n_routed_mole_experts > 1:
             self.gate = nn.Linear(config.dim, config.n_routed_mole_experts)
 
     def forward(self, x, embed: torch.Tensor):
         if self.config.n_routed_mole_experts == 0:
             return x
+        if self.config.n_routed_mole_experts == 1:
+            return x + embed
         B, T, C = x.shape
         gate_logits = self.gate(x)
         gate_probs = F.softmax(gate_logits, dim=-1).view(B, T, 1, self.config.n_routed_mole_experts)

@@ -10,6 +10,7 @@ class SparseEmbedding(nn.Module):
                  optim_device: str = "cpu",
                  output_dtype: torch.dtype = torch.float32,
                  std: float = 0.01,
+                 optimizer_type: str = "adamw",
                  ):
         super().__init__()
         self.num_embeddings = num_embeddings
@@ -18,15 +19,18 @@ class SparseEmbedding(nn.Module):
         self.device = device
         self.optim_device = optim_device
         self.output_dtype = output_dtype
+        self.optimizer_type = optimizer_type
         # 初始化权重在CPU上
         self.weight = torch.nn.parameter.Parameter(torch.empty((num_embeddings, embedding_dim), device=device, pin_memory=True), requires_grad=False)
         # self.weight = torch.empty((num_embeddings, embedding_dim), device=device, pin_memory=True)
         nn.init.normal_(self.weight, std=std)
         
-        self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
-        self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
-        self.state_steps = 0
-
+        if optimizer_type == "adamw":
+            self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
+            self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
+            # self.state_steps = 0
+            self.state_steps = torch.zeros((num_embeddings, 1), device='cpu')
+            self.state_steps.fill_(999)
 
     def forward(self, indices: torch.Tensor) -> torch.Tensor:
         self.indices = indices.to(self.device).view(-1)
@@ -34,7 +38,7 @@ class SparseEmbedding(nn.Module):
         output = self.weight[self.indices].to(device=indices.device, dtype=self.output_dtype).detach()
         return output.view(output_shape)
     @torch.no_grad()
-    def apply_gradients(self, output_grad: torch.Tensor = None, lr: float = None):
+    def apply_gradients_adamw(self, output_grad: torch.Tensor = None, lr: float = None):
         output_grad = output_grad.view(-1, self.embedding_dim)
         unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
 
@@ -44,10 +48,12 @@ class SparseEmbedding(nn.Module):
         param = self.weight[unique_indices].to(self.optim_device, non_blocking=True)
         exp_avg = self.exp_avgs[unique_indices].to(self.optim_device, non_blocking=True)
         exp_avg_sq = self.exp_avg_sqs[unique_indices].to(self.optim_device, non_blocking=True)
-
+        steps = self.state_steps[unique_indices].to(self.optim_device, non_blocking=True)
         # calc
 
-        self.state_steps += 1
+        # self.state_steps += 1
+        steps += 1
+        
         lr = lr or self.optimizer_params["lr"]
         beta1, beta2, weight_decay, eps = self.optimizer_params["beta1"], self.optimizer_params["beta2"], self.optimizer_params["weight_decay"], self.optimizer_params["eps"]
 
@@ -55,24 +61,45 @@ class SparseEmbedding(nn.Module):
         exp_avg.lerp_(grad, 1 - beta1)
         exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
-        bias_correction1 = 1 - beta1**self.state_steps
-        bias_correction2 = 1 - beta2**self.state_steps
+        bias_correction1 = 1 - beta1**steps
+        bias_correction2 = 1 - beta2**steps
 
         step_size_neg = - lr / bias_correction1
 
-        denom = (exp_avg_sq.sqrt() / (sqrt(bias_correction2) * step_size_neg)).add_(eps / step_size_neg)
+        denom = (exp_avg_sq.sqrt() / (bias_correction2.sqrt() * step_size_neg)).add_(eps / step_size_neg)
         param.addcdiv_(exp_avg, denom)
 
         # write back
         self.weight[unique_indices] = param.to(self.device, non_blocking=True)
         self.exp_avgs[unique_indices] = exp_avg.to(self.device, non_blocking=True)
         self.exp_avg_sqs[unique_indices] = exp_avg_sq.to(self.device, non_blocking=True)
+        self.state_steps[unique_indices] = steps.to(self.device, non_blocking=True)
 
+    @torch.no_grad()
+    def apply_gradients_sgd(self, output_grad: torch.Tensor = None, lr: float = None):
+        output_grad = output_grad.view(-1, self.embedding_dim)
+        unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
+        grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=output_grad.dtype)
+        grad.index_add_(0, inverse.to(output_grad.device), output_grad)
+        grad = grad.to(self.optim_device, dtype=torch.float32, non_blocking=True)
+        param = self.weight[unique_indices].to(self.optim_device, non_blocking=True)
+        lr = lr or self.optimizer_params["lr"]
+        weight_decay = self.optimizer_params["weight_decay"]
 
+        param.mul_(1 - lr * weight_decay)
+        param.add_(grad, alpha=-lr)
 
+        # write back
+        self.weight[unique_indices] = param.to(self.device, non_blocking=True)
 
-
-
+    @torch.no_grad()
+    def apply_gradients(self, output_grad: torch.Tensor = None, lr: float = None):
+        if self.optimizer_type == "adamw":
+            self.apply_gradients_adamw(output_grad, lr)
+        elif self.optimizer_type == "sgd":
+            self.apply_gradients_sgd(output_grad, lr)
+        else:
+            raise ValueError("optimizer_type must be adamw or sgd")
             
 if __name__ == "__main__":
     embed = SparseEmbedding(10, 4, optimizer_params = {

@@ -77,7 +77,9 @@ if accelerator.is_local_main_process and dim_embed > 0:
                         "eps": 1e-8,
                     },
                     std = config['embedding_init_std'],
-                    output_dtype = torch.bfloat16)
+                    output_dtype = torch.bfloat16,
+                    optimizer_type= config['optimizer_type'] if 'optimizer_type' in config else 'adamw',
+                )
     config['embedding_params'] = sum(p.numel() for p in embedding.parameters())
     wandb.config.update(config)
 
@@ -139,6 +141,13 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
                 }, step=step)
             for k, v in time_raw.items():
                 wandb.log({f'timing/{k}': v}, step=step)
+            # 报告每个参数的grad的norm
+            for name, p in model.named_parameters():
+                if p.grad is not None:
+                    wandb.log({f'grad_norm/{name}': p.grad.norm().item()}, step=step)
+            if dim_embed > 0:
+                wandb.log({'grad_norm/embedding': embed.grad.norm().item()})
+
         
     
     if accelerator.is_local_main_process:
