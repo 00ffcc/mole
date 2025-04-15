@@ -18,7 +18,7 @@
     "seq_aux": true,
     "norm_topk_prob": true,
     "n_routed_mole_experts": 0,
-    "offload_tok_embbedings": false,
+    "offload_tok_embbedings": true,
     "is_profile": false,
     "tokenizer_path": "EleutherAI/pythia-70m-deduped",
     "max_length": 2049,
@@ -28,5 +28,6 @@
     "max_lr": 1e-3,
     "weight_decay": 0.0001,
     "max_samples": 47700000,
-    "embedding_init_std": 1e-5
+    "embedding_init_std": 1e-5,
+    "optimizer_type": "adamw"
 }

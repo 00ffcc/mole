@@ -28,9 +28,6 @@ class SparseEmbedding(nn.Module):
         if optimizer_type == "adamw":
             self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
             self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
-            # self.state_steps = 0
-            self.state_steps = torch.zeros((num_embeddings, 1), device='cpu')
-            self.state_steps.fill_(999)
 
     def forward(self, indices: torch.Tensor) -> torch.Tensor:
         self.indices = indices.to(self.device).view(-1)
@@ -48,32 +45,21 @@ class SparseEmbedding(nn.Module):
         param = self.weight[unique_indices].to(self.optim_device, non_blocking=True)
         exp_avg = self.exp_avgs[unique_indices].to(self.optim_device, non_blocking=True)
         exp_avg_sq = self.exp_avg_sqs[unique_indices].to(self.optim_device, non_blocking=True)
-        steps = self.state_steps[unique_indices].to(self.optim_device, non_blocking=True)
-        # calc
-
-        # self.state_steps += 1
-        steps += 1
         
-        lr = lr or self.optimizer_params["lr"]
+        lr = lr if lr is not None else self.optimizer_params["lr"]
         beta1, beta2, weight_decay, eps = self.optimizer_params["beta1"], self.optimizer_params["beta2"], self.optimizer_params["weight_decay"], self.optimizer_params["eps"]
 
         param.mul_(1 - lr * weight_decay)
         exp_avg.lerp_(grad, 1 - beta1)
         exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
-        bias_correction1 = 1 - beta1**steps
-        bias_correction2 = 1 - beta2**steps
-
-        step_size_neg = - lr / bias_correction1
-
-        denom = (exp_avg_sq.sqrt() / (bias_correction2.sqrt() * step_size_neg)).add_(eps / step_size_neg)
-        param.addcdiv_(exp_avg, denom)
+        denom = exp_avg_sq.sqrt().add_(eps)
+        param.addcdiv_(exp_avg * (-lr), denom)
 
         # write back
         self.weight[unique_indices] = param.to(self.device, non_blocking=True)
         self.exp_avgs[unique_indices] = exp_avg.to(self.device, non_blocking=True)
         self.exp_avg_sqs[unique_indices] = exp_avg_sq.to(self.device, non_blocking=True)
-        self.state_steps[unique_indices] = steps.to(self.device, non_blocking=True)
 
     @torch.no_grad()
     def apply_gradients_sgd(self, output_grad: torch.Tensor = None, lr: float = None):

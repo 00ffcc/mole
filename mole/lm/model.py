@@ -320,7 +320,8 @@ class MoLELM(PreTrainedModel):
         self.output = nn.Linear(params.dim, params.vocab_size, bias=False)
         if not params.offload_tok_embbedings:
             self.tok_embeddings = nn.Embedding(params.vocab_size, params.dim)
-            self.tok_embeddings.weight.data.normal_(mean=0.0, std=params.embedding_init_std)
+            # self.tok_embeddings.weight.data.normal_(mean=0.0, std=params.embedding_init_std)
+            nn.init.normal_(self.tok_embeddings.weight, std=params.embedding_init_std)
         self.register_buffer("pos_cis",
                              precompute_pos_cis(dim=params.dim // params.n_heads, theta=params.rope_theta),
                              persistent=False)

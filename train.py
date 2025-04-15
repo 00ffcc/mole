@@ -2,6 +2,7 @@ from accelerate import Accelerator, ProfileKwargs
 import torch.distributed as dist
 import torch
 from mole.embedding_offload.embedding_adamw import SparseEmbedding
+# from mole.embedding_offload.embedding_fix import SparseEmbedding
 from contextlib import nullcontext, contextmanager
 from codetiming import Timer
 from torch.utils.data import DataLoader
@@ -12,6 +13,7 @@ from mole.lm.model import MoLELM
 from mole.lm.dataset import PretrainDataset
 from transformers import AutoTokenizer
 import argparse
+from mole.lm.scheduler import LinearWarmupCosineAnnealingLR
 
 arf = argparse.ArgumentParser()
 arfr = arf.add_argument_group('required arguments')
@@ -59,13 +61,14 @@ if accelerator.is_local_main_process:
     config['model_params'] = {k: p.numel() for k, p in model.named_parameters()}
     wandb.config.update(config)
 
-warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: epoch / config['warmup_steps'] if epoch < config['warmup_steps'] else 1.0)
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=config['max_steps'], T_mult=2, eta_min=0)
+scheduler = LinearWarmupCosineAnnealingLR(optimizer, num_warmup_steps=config['warmup_steps'], num_training_steps=config['max_steps'])
+
 criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
-dataloader, model, optimizer, scheduler, warmup_scheduler = accelerator.prepare(dataloader, model, optimizer, scheduler, warmup_scheduler)
+dataloader, model, optimizer, scheduler = accelerator.prepare(dataloader, model, optimizer, scheduler)
 
 dim_embed = config['dim'] * (config['n_routed_mole_experts'] * config['n_layers'] + (1 if config['offload_tok_embbedings'] else 0))
+dtype = torch.float32
 if accelerator.is_local_main_process and dim_embed > 0:
     embedding = SparseEmbedding(
                     config['vocab_size'], 
@@ -77,7 +80,7 @@ if accelerator.is_local_main_process and dim_embed > 0:
                         "eps": 1e-8,
                     },
                     std = config['embedding_init_std'],
-                    output_dtype = torch.bfloat16,
+                    output_dtype = dtype,
                     optimizer_type= config['optimizer_type'] if 'optimizer_type' in config else 'adamw',
                 )
     config['embedding_params'] = sum(p.numel() for p in embedding.parameters())
@@ -88,25 +91,25 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
         if step >= config['max_steps']:
             break
         time_raw = {}
-        if step < config['warmup_steps']:
-            warmup_scheduler.step()
-        else:
-            scheduler.step()
+
         if dim_embed > 0:
             with _timer('embedding', time_raw) if accelerator.is_local_main_process else nullcontext():
-                gather_list = [torch.empty_like(x) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
-                dist.gather(x, gather_list, dst=0)
-                if accelerator.is_local_main_process:
-                    indexs = torch.stack(gather_list, dim=0)
-                    embeds = embedding(indexs)
-                    scatter_list = [embeds[_] for _ in range(embeds.shape[0])]
-                else:
-                    scatter_list = None
+                if accelerator.num_processes > 1:
+                    gather_list = [torch.empty_like(x) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
+                    dist.gather(x, gather_list, dst=0)
+                    if accelerator.is_local_main_process:
+                        indexs = torch.stack(gather_list, dim=0)
+                        embeds = embedding(indexs)
+                        scatter_list = [embeds[_] for _ in range(embeds.shape[0])]
+                    else:
+                        scatter_list = None
 
-                embed = torch.empty(x.shape + (dim_embed,), device=accelerator.device, dtype=torch.bfloat16)
-                dist.scatter(embed, scatter_list, src=0)
-                if accelerator.is_local_main_process:
-                    del embeds, indexs, gather_list, scatter_list
+                    embed = torch.empty(x.shape + (dim_embed,), device=accelerator.device, dtype=dtype)
+                    dist.scatter(embed, scatter_list, src=0)
+                    if accelerator.is_local_main_process:
+                        del embeds, indexs, gather_list, scatter_list
+                else:
+                    embed = embedding(x)
 
                 embed.requires_grad_(True)
                 embed.retain_grad()
@@ -127,12 +130,19 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
 
         if dim_embed > 0:
             with _timer('embedding_update', time_raw) if accelerator.is_local_main_process else nullcontext():
-                gather_list = [torch.empty_like(embed.grad) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
-                dist.gather(embed.grad, gather_list, dst=0)
+                # 如果进程数量>1
+                if accelerator.num_processes > 1:
+                    gather_list = [torch.empty_like(embed.grad) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
+                    dist.gather(embed.grad, gather_list, dst=0)
                 if accelerator.is_local_main_process:
-                    grad = torch.cat(gather_list, dim=0)
+                    if accelerator.num_processes > 1:
+                        grad = torch.cat(gather_list, dim=0)
+                    else:
+                        grad = embed.grad
                     lr = optimizer.param_groups[0]['lr']
                     embedding.apply_gradients(output_grad = grad, lr = lr)
+
+        scheduler.step(step) # 重要 https://github.com/huggingface/accelerate/issues/2142
         
         if accelerator.is_local_main_process:
             wandb.log({
@@ -142,7 +152,7 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
             for k, v in time_raw.items():
                 wandb.log({f'timing/{k}': v}, step=step)
             # 报告每个参数的grad的norm
-            for name, p in model.named_parameters():
+            for name, p in accelerator.unwrap_model(model).named_parameters():
                 if p.grad is not None:
                     wandb.log({f'grad_norm/{name}': p.grad.norm().item()}, step=step)
             if dim_embed > 0:
