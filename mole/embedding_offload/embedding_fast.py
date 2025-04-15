@@ -27,7 +27,7 @@ class SparseEmbedding(nn.Module):
         self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
     @torch.no_grad()
     def forward(self, indices: torch.Tensor) -> torch.Tensor:
-        self.indices = indices.to(self.device).view(-1)
+        self.indices = indices.view(-1)
         output_shape = indices.shape + (self.embedding_dim,)
         return index_to_cuda(self.weight, self.indices).view(output_shape)
     @torch.no_grad()
@@ -37,7 +37,7 @@ class SparseEmbedding(nn.Module):
 
         grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=output_grad.dtype)
         grad.index_add_(0, inverse.to(output_grad.device), output_grad)
-        grad = grad.to(self.optim_device, dtype=torch.float32)
+
         param = index_to_cuda(self.weight, unique_indices)
         exp_avg = index_to_cuda(self.exp_avgs, unique_indices)
         exp_avg_sq = index_to_cuda(self.exp_avg_sqs, unique_indices)
@@ -69,9 +69,9 @@ if __name__ == "__main__":
     
     
     # 模拟训练步骤
-    indices = torch.randint(0, 10, (1, 12)).cuda()
+    indices = torch.randint(0, 10, (1, 12), dtype=torch.int32).cuda()
     out = embed(indices)
     loss = out.sum()
-    loss.backward()
-    embed.apply_gradients()
-    print(embed.state_steps)
+    # loss.backward()
+    grad = torch.ones_like(out)
+    embed.apply_gradients(output_grad=grad, lr=1e-3)

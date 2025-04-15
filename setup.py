@@ -6,8 +6,8 @@ setup(
     description="mole",
     author="00ffcc",  
     author_email="guizhiyu@mail.ustc.edu.cn",
-    packages=find_packages('mole'),
-    package_dir={'':'mole'},
+    packages=find_packages(),
+    # package_dir={'':'mole'},
     install_requires=[
     ],
     entry_points={
