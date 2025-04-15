@@ -1,8 +1,9 @@
 from accelerate import Accelerator, ProfileKwargs
 import torch.distributed as dist
 import torch
-from mole.embedding_offload.embedding_adamw import SparseEmbedding
+# from mole.embedding_offload.embedding_adamw import SparseEmbedding
 # from mole.embedding_offload.embedding_fix import SparseEmbedding
+from mole.embedding_offload.embedding_fast import SparseEmbedding
 from contextlib import nullcontext, contextmanager
 from codetiming import Timer
 from torch.utils.data import DataLoader
@@ -95,8 +96,8 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
         if dim_embed > 0:
             with _timer('embedding', time_raw) if accelerator.is_local_main_process else nullcontext():
                 if accelerator.num_processes > 1:
-                    gather_list = [torch.empty_like(x) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
-                    dist.gather(x, gather_list, dst=0)
+                    gather_list = [torch.empty(x.shape, device=accelerator.device, dtype=torch.int32) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
+                    dist.gather(x.to(torch.int32), gather_list, dst=0)
                     if accelerator.is_local_main_process:
                         indexs = torch.stack(gather_list, dim=0)
                         embeds = embedding(indexs)
