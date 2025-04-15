@@ -69,7 +69,10 @@ criterion = torch.nn.CrossEntropyLoss(reduction='none')
 dataloader, model, optimizer, scheduler = accelerator.prepare(dataloader, model, optimizer, scheduler)
 
 dim_embed = config['dim'] * (config['n_routed_mole_experts'] * config['n_layers'] + (1 if config['offload_tok_embbedings'] else 0))
-dtype = torch.float32
+
+# 从accelerator获取mix precision的dtype
+dtype = torch.bfloat16 if accelerator.mixed_precision else torch.float32
+
 if accelerator.is_local_main_process and dim_embed > 0:
     embedding = SparseEmbedding(
                     config['vocab_size'], 
@@ -81,8 +84,6 @@ if accelerator.is_local_main_process and dim_embed > 0:
                         "eps": 1e-8,
                     },
                     std = config['embedding_init_std'],
-                    output_dtype = dtype,
-                    optimizer_type= config['optimizer_type'] if 'optimizer_type' in config else 'adamw',
                 )
     config['embedding_params'] = sum(p.numel() for p in embedding.parameters())
     wandb.config.update(config)
@@ -100,7 +101,7 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
                     dist.gather(x.to(torch.int32), gather_list, dst=0)
                     if accelerator.is_local_main_process:
                         indexs = torch.stack(gather_list, dim=0)
-                        embeds = embedding(indexs)
+                        embeds = embedding(indexs, dtype=dtype)
                         scatter_list = [embeds[_] for _ in range(embeds.shape[0])]
                     else:
                         scatter_list = None
@@ -110,7 +111,7 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
                     if accelerator.is_local_main_process:
                         del embeds, indexs, gather_list, scatter_list
                 else:
-                    embed = embedding(x)
+                    embed = embedding(x, dtype=dtype)
 
                 embed.requires_grad_(True)
                 embed.retain_grad()

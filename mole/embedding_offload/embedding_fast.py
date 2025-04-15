@@ -26,16 +26,16 @@ class SparseEmbedding(nn.Module):
         self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
         self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
     @torch.no_grad()
-    def forward(self, indices: torch.Tensor) -> torch.Tensor:
+    def forward(self, indices: torch.Tensor, dtype: torch.dtype = torch.float32) -> torch.Tensor:
         self.indices = indices.view(-1)
         output_shape = indices.shape + (self.embedding_dim,)
-        return index_to_cuda(self.weight, self.indices).view(output_shape)
+        return index_to_cuda(self.weight, self.indices, dtype=dtype).view(output_shape)
     @torch.no_grad()
     def apply_gradients(self, output_grad: torch.Tensor = None, lr: float = None):
-        output_grad = output_grad.view(-1, self.embedding_dim)
+        output_grad = output_grad.view(-1, self.embedding_dim).to(torch.float32)
         unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
 
-        grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=output_grad.dtype)
+        grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=torch.float32)
         grad.index_add_(0, inverse.to(output_grad.device), output_grad)
 
         param = index_to_cuda(self.weight, unique_indices)

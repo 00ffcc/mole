@@ -2,7 +2,7 @@
 #include <vector>
 
 // Forward declarations of CUDA functions
-torch::Tensor index_to_cuda(const torch::Tensor& input, const torch::Tensor& indices);
+void index_to_cuda(const torch::Tensor& input, const torch::Tensor& indices, const torch::Tensor& output);
 void index_to_pinned(const torch::Tensor& input, const torch::Tensor& indices, const torch::Tensor& x);
 
 // Python bindings

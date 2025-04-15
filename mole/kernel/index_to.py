@@ -13,7 +13,7 @@ index_to_kernel = load(name='index_to_cuda',
                             extra_cflags=['-O3'],
                             extra_cuda_cflags=['-O3'],
                             )
-def index_to_cuda(a, b):
+def index_to_cuda(a: torch.Tensor, b: torch.Tensor, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     """
     Efficiently index into a pinned memory tensor 'a' using GPU indices 'b'
     
@@ -30,9 +30,11 @@ def index_to_cuda(a, b):
     assert a.dtype == torch.float32, "Tensor 'a' must be float32"
     assert b.dtype == torch.int32, "Tensor 'b' must be int32"
 
-    return index_to_kernel.index_to_cuda(a, b)
+    output = torch.empty(b.shape + (a.shape[-1],), dtype=dtype, device=b.device)
+    index_to_kernel.index_to_cuda(a, b, output)
+    return output
 
-def index_to_pinned(a, b, c):
+def index_to_pinned(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> None:
     """
     a[b] = c
     a: torch.Tensor on CPU pinned memory, dtype float32
@@ -58,6 +60,7 @@ if __name__ == "__main__":
     torch.cuda.set_device(1)
     epoch = 40
     if True:
+        dtype = torch.bfloat16
         # Create input tensor in pinned memory
         a = torch.randn(50000, 512*7, dtype=torch.float32)
         a_pinned = a.pin_memory()
@@ -78,7 +81,7 @@ if __name__ == "__main__":
         torch.cuda.synchronize()
         start = time.time()
         for _ in range(epoch):
-            result = index_to_cuda(a_pinned, b)
+            result = index_to_cuda(a_pinned, b, dtype=dtype)
             torch.cuda.synchronize()
         end = time.time()
         print(f"Optimized method: {(end - start) / epoch * 1000:.2f} ms per call")
@@ -86,7 +89,7 @@ if __name__ == "__main__":
         torch.cuda.synchronize()
         start = time.time()
         for _ in range(epoch):
-            naive_result = a_pinned[b.cpu()].to(b.device, non_blocking=False)
+            naive_result = a_pinned[b.cpu()].to(b.device, dtype=dtype, non_blocking=False)
             torch.cuda.synchronize()
         end = time.time()
         print(f"Naive method: {(end - start) / epoch * 1000:.2f} ms per call")
@@ -94,7 +97,7 @@ if __name__ == "__main__":
         torch.cuda.synchronize()
         start = time.time()
         for _ in range(epoch):
-            naive_result = a_pinned[b.cpu()].to(b.device, non_blocking=True)
+            naive_result = a_pinned[b.cpu()].to(b.device, dtype=dtype, non_blocking=True)
             torch.cuda.synchronize()
         end = time.time()
         print(f"Naive method (non-blocking): {(end - start) / epoch * 1000:.2f} ms per call")
