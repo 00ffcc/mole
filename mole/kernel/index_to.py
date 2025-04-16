@@ -9,7 +9,7 @@ index_to_kernel = load(name='index_to_cuda',
                                 os.path.join(pwd, 'index_to.cpp'), 
                                 os.path.join(pwd, 'index_to_kernel.cu')
                                 ], 
-                            verbose=True,
+                            verbose=False,
                             extra_cflags=['-O3'],
                             extra_cuda_cflags=['-O3'],
                             )
@@ -57,34 +57,47 @@ def index_to_pinned(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> None:
     
 if __name__ == "__main__":
     import time
-    torch.cuda.set_device(1)
+    device = 'cuda:7'
+    torch.cuda.set_device(device=device)
     epoch = 40
     if True:
-        dtype = torch.bfloat16
+        dtype = torch.float32
         # Create input tensor in pinned memory
-        a = torch.randn(50000, 512*7, dtype=torch.float32)
+        a = torch.randn(50000, 768*49, dtype=torch.float32)
         a_pinned = a.pin_memory()
         
         # Create indices tensor on GPU
-        b = torch.randint(0, 50000, (8192,), dtype=torch.int32, device='cuda:1')
-        
-        # Use our optimized kernel
-        result = index_to_cuda(a_pinned, b)
-        
-        # Compare with naive implementation
-        naive_result = a_pinned[b.cpu()].to(b.device)
-        
-        # Verify results
-        print("Results match:", torch.allclose(result, naive_result))
-        
+        b = torch.randint(0, 50000, (8192,), dtype=torch.int32, device=device)
+                
         # Benchmark
-        torch.cuda.synchronize()
-        start = time.time()
-        for _ in range(epoch):
-            result = index_to_cuda(a_pinned, b, dtype=dtype)
+        for k in [1, 2, 4, 8, 16, 32]:
+            if k > 1:
+                index_to_kernel = load(name='index_to_kernel', 
+                            sources=[
+                                os.path.join(pwd, 'index_to.cpp'), 
+                                os.path.join(pwd, 'index_to_kernel_multi.cu')
+                                ], 
+                            verbose=False,
+                            extra_cflags=['-O3'],
+                            extra_cuda_cflags=['-O3', f'-D_k_={k}'],
+                            )
+                
+            # Use our optimized kernel
+            result = index_to_cuda(a_pinned, b)
+            
+            # Compare with naive implementation
+            naive_result = a_pinned[b.cpu()].to(b.device)
+            
+            # Verify results
+            print("Results match:", torch.allclose(result, naive_result))
+
             torch.cuda.synchronize()
-        end = time.time()
-        print(f"Optimized method: {(end - start) / epoch * 1000:.2f} ms per call")
+            start = time.time()
+            for _ in range(epoch):
+                result = index_to_cuda(a_pinned, b, dtype=dtype)
+                torch.cuda.synchronize()
+            end = time.time()
+            print(f"Optimized method {k}: {(end - start) / epoch * 1000:.2f} ms per call")
         
         torch.cuda.synchronize()
         start = time.time()
@@ -94,18 +107,11 @@ if __name__ == "__main__":
         end = time.time()
         print(f"Naive method: {(end - start) / epoch * 1000:.2f} ms per call")
 
-        torch.cuda.synchronize()
-        start = time.time()
-        for _ in range(epoch):
-            naive_result = a_pinned[b.cpu()].to(b.device, dtype=dtype, non_blocking=True)
-            torch.cuda.synchronize()
-        end = time.time()
-        print(f"Naive method (non-blocking): {(end - start) / epoch * 1000:.2f} ms per call")
     if False:
         # Create input tensor in pinned memory
         a = torch.randn(50000, 512*7, dtype=torch.float32, pin_memory=True)
-        b = torch.randint(0, 50000, (8192,), dtype=torch.int32, device='cuda:1')
-        c = torch.randn(8192, 512*7, dtype=torch.float32, device='cuda:1')
+        b = torch.randint(0, 50000, (8192,), dtype=torch.int32, device=device)
+        c = torch.randn(8192, 512*7, dtype=torch.float32, device=device)
 
         res1 = a.clone()
         index_to_pinned(a, b, c)

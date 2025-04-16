@@ -25,6 +25,7 @@ args, _ = arf.parse_known_args()
 def _timer(name: str, timing_raw):
     with Timer(name=name, logger=None) as timer:
         yield
+        torch.cuda.synchronize()
     timing_raw[name] = timer.last
 
 profile_kwargs = ProfileKwargs(
@@ -72,6 +73,7 @@ dim_embed = config['dim'] * (config['n_routed_mole_experts'] * config['n_layers'
 
 # 从accelerator获取mix precision的dtype
 dtype = torch.bfloat16 if accelerator.mixed_precision else torch.float32
+is_timing = accelerator.is_local_main_process and config.get('is_timing', True)
 
 if accelerator.is_local_main_process and dim_embed > 0:
     embedding = SparseEmbedding(
@@ -95,7 +97,7 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
         time_raw = {}
 
         if dim_embed > 0:
-            with _timer('embedding', time_raw) if accelerator.is_local_main_process else nullcontext():
+            with _timer('embedding', time_raw) if is_timing else nullcontext():
                 if accelerator.num_processes > 1:
                     gather_list = [torch.empty(x.shape, device=accelerator.device, dtype=torch.int32) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
                     dist.gather(x.to(torch.int32), gather_list, dst=0)
@@ -118,20 +120,20 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
         else:
             embed = None
 
-        with _timer('forward', time_raw) if accelerator.is_local_main_process else nullcontext():
+        with _timer('forward', time_raw) if is_timing else nullcontext():
             out = model(input_ids=x, embedding_input=embed)
             logits = out.logits
             loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1)).view(y.shape)
             loss = (loss * mask).sum() / mask.sum()
 
-        with _timer('backward_and_update', time_raw) if accelerator.is_local_main_process else nullcontext():
+        with _timer('backward_and_update', time_raw) if is_timing else nullcontext():
             optimizer.zero_grad()
             accelerator.backward(loss)
             optimizer.step()
 
 
         if dim_embed > 0:
-            with _timer('embedding_update', time_raw) if accelerator.is_local_main_process else nullcontext():
+            with _timer('embedding_update', time_raw) if is_timing else nullcontext():
                 # 如果进程数量>1
                 if accelerator.num_processes > 1:
                     gather_list = [torch.empty_like(embed.grad) for _ in range(dist.get_world_size())] if accelerator.is_local_main_process else None
@@ -163,13 +165,13 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
         
     
     if accelerator.is_local_main_process:
-            unwarpped_model = accelerator.unwrap_model(model)
-            model_state_dict = unwarpped_model.state_dict()
-            embedding_state_dict = embedding.state_dict() if dim_embed > 0 else {}
-            state_dict = {
-                **model_state_dict,
-                **embedding_state_dict,
-            }
-            os.makedirs(f"/{pwd}/{name}", exist_ok=True)
-            torch.save(state_dict, f"/{pwd}/{name}/checkpoint.pt")
+        unwarpped_model = accelerator.unwrap_model(model)
+        model_state_dict = unwarpped_model.state_dict()
+        embedding_state_dict = embedding.state_dict() if dim_embed > 0 else {}
+        state_dict = {
+            **model_state_dict,
+            **embedding_state_dict,
+        }
+        os.makedirs(f"/{pwd}/{name}", exist_ok=True)
+        torch.save(state_dict, f"/{pwd}/{name}/checkpoint.pt")
 

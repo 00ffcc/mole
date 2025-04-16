@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from mole.kernel.index_to import index_to_pinned, index_to_cuda
+from mole.kernel.index_to import index_to_cuda, index_to_kernel
 class SparseEmbedding(nn.Module):
     def __init__(self, 
                  num_embeddings: int, 
@@ -37,25 +37,23 @@ class SparseEmbedding(nn.Module):
 
         grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=torch.float32)
         grad.index_add_(0, inverse.to(output_grad.device), output_grad)
-
-        param = index_to_cuda(self.weight, unique_indices)
-        exp_avg = index_to_cuda(self.exp_avgs, unique_indices)
-        exp_avg_sq = index_to_cuda(self.exp_avg_sqs, unique_indices)
         
         lr = lr if lr is not None else self.optimizer_params["lr"]
         beta1, beta2, weight_decay, eps = self.optimizer_params["beta1"], self.optimizer_params["beta2"], self.optimizer_params["weight_decay"], self.optimizer_params["eps"]
 
-        param.mul_(1 - lr * weight_decay)
-        exp_avg.lerp_(grad, 1 - beta1)
-        exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+        index_to_kernel.adamw(
+            self.weight,
+            grad,
+            self.exp_avgs,
+            self.exp_avg_sqs,
+            unique_indices,
+            lr,
+            beta1,
+            beta2,
+            weight_decay,
+            eps,
+        )
 
-        denom = exp_avg_sq.sqrt().add_(eps)
-        param.addcdiv_(exp_avg * (-lr), denom)
-
-        # write back
-        index_to_pinned(self.weight, unique_indices, param)
-        index_to_pinned(self.exp_avgs, unique_indices, exp_avg)
-        index_to_pinned(self.exp_avg_sqs, unique_indices, exp_avg_sq)
 
 if __name__ == "__main__":
     embed = SparseEmbedding(10, 4, optimizer_params = {
