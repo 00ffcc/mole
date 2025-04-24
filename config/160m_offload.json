@@ -17,7 +17,7 @@
     "aux_loss_alpha": 0.1,
     "seq_aux": true,
     "norm_topk_prob": true,
-    "n_routed_mole_experts": 4,
+    "n_routed_mole_experts": 2,
     "offload_tok_embbedings": true,
     "is_profile": false,
     "tokenizer_path": "EleutherAI/pythia-70m-deduped",
