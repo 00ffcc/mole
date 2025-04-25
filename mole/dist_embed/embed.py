@@ -12,7 +12,6 @@ class SparseEmbedding(nn.Module):
                  optim_device: str = "cpu",
                  std: float = 0.01,
                  optimizer_type: str = "adamw",
-                 accelerator=None,
                  src_rank=0,
                  **kwargs,
                  ):
@@ -23,9 +22,19 @@ class SparseEmbedding(nn.Module):
         self.device = device
         self.optim_device = optim_device
         self.optimizer_type = optimizer_type
-        self.accelerator = accelerator
         self.src_rank = src_rank
-        if accelerator.num_processes == 1 or src_rank == accelerator.process_index:
+        if dist.is_available() and dist.is_initialized():
+            self.local_rank = dist.get_rank()
+            self.is_main = self.local_rank == self.src_rank
+            self.world_size = dist.get_world_size()
+            self.not_ddp = self.world_size == 1
+        else:
+            self.local_rank = 0
+            self.is_main = True
+            self.world_size = 1
+            self.not_ddp = True
+
+        if self.not_ddp or self.is_main:
             self.weight = torch.nn.parameter.Parameter(torch.empty((num_embeddings, embedding_dim), device=device, pin_memory=True), requires_grad=False)
             nn.init.normal_(self.weight, std=std)
 
@@ -33,19 +42,19 @@ class SparseEmbedding(nn.Module):
             self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
     @torch.no_grad()
     def forward(self, indices: torch.Tensor, dtype: torch.dtype = torch.float32) -> torch.Tensor:
-        if self.accelerator.num_processes > 1:
-            gather_list = [torch.empty(indices.shape, device=self.accelerator.device, dtype=torch.int32) for _ in range(self.accelerator.num_processes)] if self.src_rank == self.accelerator.process_index else None
-            dist.gather(indices.to(torch.int32), gather_list, dst=0)
-            if self.src_rank == self.accelerator.process_index:
+        if not self.not_ddp:
+            gather_list = [torch.empty(indices.shape, device=indices.device, dtype=torch.int32) for _ in range(self.world_size)] if self.is_main else None
+            dist.gather(indices.to(torch.int32), gather_list, dst=self.src_rank)
+            if self.is_main:
                 indexs = torch.stack(gather_list, dim=0)
                 embeds = self.forward_single(indexs, dtype=dtype)
                 scatter_list = [embeds[_] for _ in range(embeds.shape[0])]
             else:
                 scatter_list = None
 
-            embed = torch.empty(indices.shape + (self.embedding_dim,), device=self.accelerator.device, dtype=dtype)
+            embed = torch.empty(indices.shape + (self.embedding_dim,), device=indices.device, dtype=dtype)
             dist.scatter(embed, scatter_list, src=0)
-            if self.src_rank == self.accelerator.process_index:
+            if self.is_main:
                 del embeds, indexs, gather_list, scatter_list
         else:
             embed = self.forward_single(indices, dtype=dtype)
@@ -62,12 +71,12 @@ class SparseEmbedding(nn.Module):
     
     @torch.no_grad()
     def apply_gradients_hook(self, grad: torch.Tensor = None):
-        if self.accelerator.num_processes > 1:
+        if not self.not_ddp:
             dist.barrier()
             torch.cuda.synchronize()
-            gather_list = [torch.empty_like(grad) for _ in range(self.accelerator.num_processes)] if self.src_rank == self.accelerator.process_index else None
+            gather_list = [torch.empty_like(grad) for _ in range(self.world_size)] if self.is_main else None
             dist.gather(grad.contiguous(), gather_list, dst=self.src_rank) # https://github.com/pytorch/pytorch/issues/73515 gather的输入必须是 contiguous
-            if self.src_rank == self.accelerator.process_index:
+            if self.is_main:
                 grad = torch.cat(gather_list, dim=0)
                 self.apply_gradients_single(grad)
                 del grad, gather_list
@@ -78,6 +87,7 @@ class SparseEmbedding(nn.Module):
 
     @torch.no_grad()
     def apply_gradients_single(self, output_grad: torch.Tensor = None):
+        print("apply_gradients_single", output_grad)
         output_grad = output_grad.view(-1, self.embedding_dim).to(torch.float32)
         unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
 
@@ -114,7 +124,6 @@ if __name__ == "__main__":
             "weight_decay": 0.01,
             "eps": 1e-8,
         },
-        accelerator=accelerator,
     )
     
     # 模拟训练步骤
