@@ -13,6 +13,7 @@ class SparseEmbedding(nn.Module):
                  std: float = 0.01,
                  optimizer_type: str = "adamw",
                  src_rank=0,
+                 embedding_output_dtype: torch.dtype = torch.float32,
                  **kwargs,
                  ):
         super().__init__()
@@ -23,6 +24,8 @@ class SparseEmbedding(nn.Module):
         self.optim_device = optim_device
         self.optimizer_type = optimizer_type
         self.src_rank = src_rank
+        self.lr = 0
+        self.embedding_output_dtype = embedding_output_dtype
         if dist.is_available() and dist.is_initialized():
             self.local_rank = dist.get_rank()
             self.is_main = self.local_rank == self.src_rank
@@ -41,7 +44,8 @@ class SparseEmbedding(nn.Module):
             self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
             self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
     @torch.no_grad()
-    def forward(self, indices: torch.Tensor, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    def forward(self, indices: torch.Tensor) -> torch.Tensor:
+        dtype = self.embedding_output_dtype
         if not self.not_ddp:
             gather_list = [torch.empty(indices.shape, device=indices.device, dtype=torch.int32) for _ in range(self.world_size)] if self.is_main else None
             dist.gather(indices.to(torch.int32), gather_list, dst=self.src_rank)
@@ -87,14 +91,13 @@ class SparseEmbedding(nn.Module):
 
     @torch.no_grad()
     def apply_gradients_single(self, output_grad: torch.Tensor = None):
-        print("apply_gradients_single", output_grad)
         output_grad = output_grad.view(-1, self.embedding_dim).to(torch.float32)
         unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
 
         grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=torch.float32)
         grad.index_add_(0, inverse.to(output_grad.device), output_grad)
         
-        lr = self.optimizer_params["lr"]
+        lr = self.lr
         beta1, beta2, weight_decay, eps = self.optimizer_params["beta1"], self.optimizer_params["beta2"], self.optimizer_params["weight_decay"], self.optimizer_params["eps"]
 
         index_to_kernel.adamw(
@@ -111,7 +114,7 @@ class SparseEmbedding(nn.Module):
         )
     
     def update_lr(self, lr: float):
-        self.optimizer_params["lr"] = lr
+        self.lr = lr
 
 if __name__ == "__main__":
     from accelerate import Accelerator

@@ -1,13 +1,10 @@
-import numpy as np
 import torch
 from torch import nn
 from mole.dist_embed.embed import SparseEmbedding
-from types import SimpleNamespace
-
 
 class PKM(nn.Module):
 
-    def __init__(self, config: SimpleNamespace, values: SparseEmbedding):
+    def __init__(self, config, values: SparseEmbedding = None):
 
         super().__init__()
 
@@ -21,8 +18,16 @@ class PKM(nn.Module):
         self.heads = config.pkm_heads
         self.knn = config.pkm_knn # 取knn个
         assert self.k_dim >= 2 and self.k_dim % 2 == 0
-
-        self.values = [values] # 避免注册为子模块
+        
+        # 避免注册为子模块
+        self.values = [values if values is not None else
+                       SparseEmbedding(
+                           num_embeddings         = self.size, 
+                           embedding_dim          = self.v_dim, 
+                           optimizer_params       = config.optimizer_params, 
+                           std                    = config.embedding_init_std,
+                           embedding_output_dtype = config.embedding_output_dtype
+                       )] 
 
         # query network
         self.query_proj = nn.Linear(self.input_dim, self.heads * self.k_dim, bias=True)
@@ -81,6 +86,7 @@ class PKM(nn.Module):
         return output
     
 if __name__ == '__main__':
+    from types import SimpleNamespace
     config = SimpleNamespace(
         dim=10,
         pkm_k_dim=16,
