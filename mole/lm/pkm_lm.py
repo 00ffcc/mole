@@ -365,6 +365,8 @@ class PKMLM(PreTrainedModel):
         '''
         for pkm_layer in self.pkm_layers:
             pkm_layer.values[0].lr = new_lr
+        if self.config.offload_tok_embbedings:
+            self.tok_embeddings[0].lr = new_lr
 
 if __name__ == '__main__':
     import json

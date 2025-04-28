@@ -35,11 +35,6 @@ with open(os.path.join(pwd, args.model_config_path), 'r') as f:
     config['max_steps'] = config['max_samples'] // config['batch_size']
     config['embedding_output_dtype'] = torch.bfloat16 if accelerator.mixed_precision else torch.float32
 
-if accelerator.is_local_main_process:
-    import wandb
-    import datetime
-    name = f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    wandb.init(project="pkm-lm", name=name, config=config)
     
 lmconfig = pkmlm_config(**config)
 model = PKMLM(lmconfig)
@@ -54,10 +49,20 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=config['max_lr'], weight_de
 
 if accelerator.is_local_main_process:
     # 统计参数量
-    total_params = sum(p.numel() for p in model.parameters())
-    config['total_params'] = total_params
+    activated_params = sum(p.numel() for p in model.parameters())
+    config['activated_params'] = activated_params
     config['model_params'] = {k: p.numel() for k, p in model.named_parameters()}
-    wandb.config.update(config)
+    offloaded_params = 0
+    if config['offload_tok_embbedings']:
+        offloaded_params += sum(p.numel() for p in model.tok_embeddings[0].parameters())
+    for m in model.pkm_layers:
+        offloaded_params += sum(p.numel() for p in m.values[0].parameters())
+    config['offloaded_params'] = offloaded_params
+
+    import wandb
+    import datetime
+    name = f"a{activated_params//1000000}m-o{offloaded_params//1000000}m-{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    wandb.init(project="pkm-lm", name=name, config=config)
 
 scheduler = LinearWarmupCosineAnnealingLR(optimizer, num_warmup_steps=config['warmup_steps'], num_training_steps=config['max_steps'])
 

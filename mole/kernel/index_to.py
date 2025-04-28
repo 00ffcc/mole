@@ -28,7 +28,7 @@ def index_to_cuda(a: torch.Tensor, b: torch.Tensor, dtype: torch.dtype = torch.f
     assert a.is_pinned(), "Tensor 'a' must be in pinned memory"
     assert b.is_cuda, "Tensor 'b' must be on CUDA device"
     assert a.dtype in [torch.float32, torch.float16, torch.bfloat16] # a must be float32, float16, or bfloat16
-    b = b.to(torch.int32)
+    assert b.dtype == torch.int32, "Tensor 'b' must be int32"
 
     output = torch.empty(b.shape + (a.shape[-1],), dtype=dtype, device=b.device)
     index_to_kernel.index_to_cuda(a, b, output)

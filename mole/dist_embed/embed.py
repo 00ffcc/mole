@@ -69,7 +69,7 @@ class SparseEmbedding(nn.Module):
     
     @torch.no_grad()
     def forward_single(self, indices: torch.Tensor, dtype: torch.dtype = torch.float32) -> torch.Tensor:
-        self.indices = indices.view(-1)
+        self.indices = indices.view(-1).to(torch.int32)
         output_shape = indices.shape + (self.embedding_dim,)
         return index_to_cuda(self.weight, self.indices, dtype=dtype).view(output_shape)
     
@@ -96,8 +96,11 @@ class SparseEmbedding(nn.Module):
 
         grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=torch.float32)
         grad.index_add_(0, inverse.to(output_grad.device), output_grad)
-        
+
+        grad = self.grad_clip(grad, self.optimizer_params.get("grad_clip_max_norm", None))
+
         lr = self.lr
+        # print(f"lr: {lr} activate rate: {unique_indices.shape[0]}/{self.num_embeddings}")
         beta1, beta2, weight_decay, eps = self.optimizer_params["beta1"], self.optimizer_params["beta2"], self.optimizer_params["weight_decay"], self.optimizer_params["eps"]
 
         index_to_kernel.adamw(
@@ -115,6 +118,15 @@ class SparseEmbedding(nn.Module):
     
     def update_lr(self, lr: float):
         self.lr = lr
+    
+    @torch.no_grad()
+    def grad_clip(self, grad, max_norm):
+        if max_norm is None:
+            return grad
+        grad_norm = torch.norm(grad, p=2, dim=-1)
+        scale = torch.clamp(max_norm / (grad_norm + 1e-6), max=1.0)
+        grad = grad * scale.unsqueeze(-1)
+        return grad
 
 if __name__ == "__main__":
     from accelerate import Accelerator
@@ -129,6 +141,11 @@ if __name__ == "__main__":
         },
     )
     
+    grad = torch.rand(10, 4, dtype=torch.float32).cuda()
+    grad[0, :] *= 100
+    print(grad)
+    print(embed.grad_clip(grad, 1.0))
+
     # 模拟训练步骤
     indices = torch.randint(0, 10, (1, 3), dtype=torch.int32).cuda()
     out = embed(indices)
