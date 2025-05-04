@@ -56,12 +56,13 @@ if accelerator.is_local_main_process:
     if config['offload_tok_embbedings']:
         offloaded_params += sum(p.numel() for p in model.tok_embeddings[0].parameters())
     for m in model.pkm_layers:
-        offloaded_params += sum(p.numel() for p in m.values[0].parameters())
+        if not config['use_lucidrains_pkm']:
+            offloaded_params += sum(p.numel() for p in m.values[0].parameters())
     config['offloaded_params'] = offloaded_params
 
     import wandb
     import datetime
-    name = f"a{activated_params//1000000}m-o{offloaded_params//1000000}m-{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    name = f"{config['norm_type']}-a{activated_params//1000000}m-o{offloaded_params//1000000}m-{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     wandb.init(project="pkm-lm", name=name, config=config)
 
 scheduler = LinearWarmupCosineAnnealingLR(optimizer, num_warmup_steps=config['warmup_steps'], num_training_steps=config['max_steps'])
@@ -97,7 +98,7 @@ with accelerator.profile() if config['is_profile'] else nullcontext() as prof:
             if accelerator.is_local_main_process:
                 wandb.log({
                         'loss': loss.item(),
-                        'lr': optimizer.param_groups[0]['lr'],
+                        'config/lr': optimizer.param_groups[0]['lr'],
                     }, step=step)
                 for k, v in time_raw.items():
                     wandb.log({f'timing/{k}': v}, step=step)

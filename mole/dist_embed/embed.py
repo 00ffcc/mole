@@ -70,8 +70,9 @@ class SparseEmbedding(nn.Module):
     @torch.no_grad()
     def forward_single(self, indices: torch.Tensor, dtype: torch.dtype = torch.float32) -> torch.Tensor:
         self.indices = indices.view(-1).to(torch.int32)
+        self.unique_indices, self.inverse = torch.unique(self.indices, sorted=True, return_inverse=True)
         output_shape = indices.shape + (self.embedding_dim,)
-        return index_to_cuda(self.weight, self.indices, dtype=dtype).view(output_shape)
+        return index_to_cuda(self.weight, self.unique_indices, dtype=dtype)[self.inverse].view(output_shape)
     
     @torch.no_grad()
     def apply_gradients_hook(self, grad: torch.Tensor = None):
@@ -92,7 +93,7 @@ class SparseEmbedding(nn.Module):
     @torch.no_grad()
     def apply_gradients_single(self, output_grad: torch.Tensor = None):
         output_grad = output_grad.view(-1, self.embedding_dim).to(torch.float32)
-        unique_indices, inverse = torch.unique(self.indices, return_inverse=True)
+        unique_indices, inverse = self.unique_indices, self.inverse
 
         grad = torch.zeros((unique_indices.shape[0], self.embedding_dim), device=output_grad.device, dtype=torch.float32)
         grad.index_add_(0, inverse.to(output_grad.device), output_grad)

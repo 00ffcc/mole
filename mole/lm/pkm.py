@@ -25,7 +25,7 @@ class PKM(nn.Module):
                            num_embeddings         = self.size, 
                            embedding_dim          = self.v_dim, 
                            optimizer_params       = config.optimizer_params, 
-                           std                    = config.embedding_init_std,
+                           std                    = self.v_dim ** -0.5, 
                            embedding_output_dtype = config.embedding_output_dtype
                        )] 
 
@@ -33,12 +33,21 @@ class PKM(nn.Module):
         self.query_proj = nn.Linear(self.input_dim, self.heads * self.k_dim, bias=True)
 
         self.keys = nn.Parameter(torch.empty(self.heads, 2, self.n_keys, self.k_dim // 2))
-        nn.init.normal_(self.keys)
+        bound = (self.k_dim // 2) ** -0.5
+        nn.init.uniform_(self.keys, -bound, bound)
+
+        # self.ln_q = nn.LayerNorm(self.k_dim)
+        # nn.init.constant_(self.ln_q.weight, 1 / 3000)
+        # self.ln_k = nn.LayerNorm(self.k_dim // 2)
+
 
 
     def get_indices(self, query):
+        # query = self.ln_q(query)
+        # key = self.ln_k(self.keys)
+        key = self.keys
         query = query.view(-1, self.heads, 2, self.k_dim // 2, 1)
-        scores = (self.keys @ query).view(-1, self.heads, 2, self.n_keys) # (B, H, 2, n_keys)
+        scores = (key @ query).view(-1, self.heads, 2, self.n_keys) # (B, H, 2, n_keys)
 
         scores1 = scores[:, :, 0, :]
         scores2 = scores[:, :, 1, :]
@@ -73,17 +82,14 @@ class PKM(nn.Module):
 
         # merge heads / knn (since we sum heads)
         indices = indices.view(-1, self.heads * self.knn)
+        scores = scores.float().softmax(dim=-1).type_as(scores)
         scores = scores.view(-1, self.heads * self.knn)
 
         # weighted sum of values
         output = self.values[0](indices)
         output = (output * scores.unsqueeze(-1)).sum(dim=-2)
 
-        # reshape output
-        if len(prefix_shape) >= 2:
-            output = output.view(prefix_shape + (self.v_dim,))
-
-        return output
+        return output.view(prefix_shape + (self.v_dim,))
     
 if __name__ == '__main__':
     from types import SimpleNamespace

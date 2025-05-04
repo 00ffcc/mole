@@ -280,19 +280,35 @@ class Block(nn.Module):
         self.feed_forward = FeedForward(config) if not config.use_moe else MOEFeedForward(config)
 
         self.output_inter_state = any(layer_id == x for x, _ in config.pkm_layers)
+        self.norm_type = config.norm_type # pre or post
 
 
     def forward(self, x, pos_cis, past_key_value=None, use_cache=False):
-        h_attn, past_kv = self.attention(
-            self.attention_norm(x),
-            pos_cis,
-            past_key_value=past_key_value,
-            use_cache=use_cache
-        )
-        h = x + h_attn
-        h_norm = self.ffn_norm(h)
-        out = h + self.feed_forward(h_norm)
-        return out, past_kv, h_norm if self.output_inter_state else None
+        if self.norm_type == 'post':
+            x = self.attention_norm(x)
+            h_attn, past_kv = self.attention(
+                x,
+                pos_cis,
+                past_key_value=past_key_value,
+                use_cache=use_cache
+            )
+            h = x + h_attn
+            h = self.ffn_norm(h)
+            out = h + self.feed_forward(h)
+            return out, past_kv, h if self.output_inter_state else None
+        elif self.norm_type == 'pre':
+            h_attn, past_kv = self.attention(
+                self.attention_norm(x),
+                pos_cis,
+                past_key_value=past_key_value,
+                use_cache=use_cache
+            )
+            h = x + h_attn
+            h_norm = self.ffn_norm(h)
+            out = h + self.feed_forward(h_norm)
+            return out, past_kv, h_norm if self.output_inter_state else None
+        else:
+            raise ValueError(f'Unsupported norm_type: {self.norm_type}')
 
 
 class PKMLM(PreTrainedModel):
@@ -322,7 +338,17 @@ class PKMLM(PreTrainedModel):
                              persistent=False)
         # config.pkm_layers: List[List[int, int]]: [[x, y],...] : 第x层, 插到第y层后
 
-        self.pkm_layers = nn.ModuleList([PKM(config) for _ in range(len(config.pkm_layers))])
+        if not config.use_lucidrains_pkm:
+            self.pkm_layers = nn.ModuleList([PKM(config) for _ in range(len(config.pkm_layers))])
+        else:
+            from product_key_memory import PKM as lcu_PKM
+            self.pkm_layers = nn.ModuleList([lcu_PKM(
+                    dim = config.dim,
+                    heads = config.pkm_heads,
+                    num_keys = config.pkm_n_keys,
+                    topk = config.pkm_knn,
+                    dim_head = config.pkm_k_dim//2,
+            ) for _ in range(len(config.pkm_layers))])
         self.pkm_dict = {
             y: (x, self.pkm_layers[i]) for i, (x, y) in enumerate(config.pkm_layers)
         }
@@ -364,7 +390,8 @@ class PKMLM(PreTrainedModel):
         更新SparseEmbedding的学习率
         '''
         for pkm_layer in self.pkm_layers:
-            pkm_layer.values[0].lr = new_lr
+            if isinstance(pkm_layer, PKM):
+                pkm_layer.values[0].lr = new_lr * 4
         if self.config.offload_tok_embbedings:
             self.tok_embeddings[0].lr = new_lr
 
