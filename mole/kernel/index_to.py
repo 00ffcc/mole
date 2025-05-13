@@ -57,21 +57,25 @@ def index_to_pinned(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor) -> None:
     
 if __name__ == "__main__":
     import time
-    device = 'cuda:7'
+    device = 'cuda:0'
     torch.cuda.set_device(device=device)
     epoch = 40
     if True:
         dtype = torch.float32
         # Create input tensor in pinned memory
-        a = torch.randn(50000, 768*49, dtype=torch.float32)
+        num = 1024*1024
+        batch_size = 16*2048*8
+        dim = 256
+        a = torch.randn(num, dim, dtype=torch.float32)
         a_pinned = a.pin_memory()
         
         # Create indices tensor on GPU
-        b = torch.randint(0, 50000, (8192,), dtype=torch.int32, device=device)
-                
+        b = torch.randint(0, num, (batch_size,), dtype=torch.int32, device=device)
+        b = torch.unique(b, sorted=True)
+        print(f"Unique indices: {b.shape}")
         # Benchmark
-        for k in [1, 2, 4, 8, 16, 32]:
-            if k > 1:
+        for k in [-1, 1, 32, 64, 128, 256]:
+            if k != -1:
                 index_to_kernel = load(name='index_to_kernel', 
                             sources=[
                                 os.path.join(pwd, 'index_to.cpp'), 
@@ -79,7 +83,7 @@ if __name__ == "__main__":
                                 ], 
                             verbose=False,
                             extra_cflags=['-O3'],
-                            extra_cuda_cflags=['-O3', f'-D_k_={k}'],
+                            extra_cuda_cflags=['-O3', f'-D_k_={k}', f'-D_n_={dim}'],
                             )
                 
             # Use our optimized kernel

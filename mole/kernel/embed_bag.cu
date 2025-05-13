@@ -7,53 +7,8 @@
 template <typename T>
 __global__ void index_to_cuda_kernel(
     const float* __restrict__ input,
-    const int*                indices,
-          T*     __restrict__ output
-    ) {
-    const float* __restrict__ input_ = input + indices[blockIdx.x] * _n_ + threadIdx.x;
-    T* __restrict__ output_ = output + blockIdx.x * _n_ + threadIdx.x;
-    #pragma unroll
-    for (int i=0; i<_n_; i+= _k_)
-        output_[i] = T(input_[i]);
-}
-
-void index_to_cuda(
-    const torch::Tensor& input,
-    const torch::Tensor& indices,
-    const torch::Tensor& output) {
-    
-    assert(input.size(1) == _n_);
-    assert(_n_%_k_ == 0);
-    
-    dim3 blocksize(indices.size(0)), gridsize(_k_);
-    
-    // Launch kernel
-    if (output.dtype() == torch::kFloat)
-        index_to_cuda_kernel<<<blocksize, gridsize>>>(
-            input.data_ptr<float>(),
-            indices.data_ptr<int>(),
-            output.data_ptr<float>()
-        );
-    else if (output.dtype() == torch::kHalf)
-        index_to_cuda_kernel<<<blocksize, gridsize>>>(
-            input.data_ptr<float>(),
-            indices.data_ptr<int>(),
-            output.data_ptr<at::Half>()
-        );
-    else if (output.dtype() == torch::kBFloat16)
-        index_to_cuda_kernel<<<blocksize, gridsize>>>(
-            input.data_ptr<float>(),
-            indices.data_ptr<int>(),
-            output.data_ptr<at::BFloat16>()
-        );
-    else
-        throw std::runtime_error("Unsupported output dtype");
-}
-// CUDA to pin_memory
-__global__ void index_to_pinned_kernel(
-    float* __restrict__ input,
     const int* __restrict__ indices,
-    const float* __restrict__ x,
+    T* __restrict__ output,
     const int batch_size,
     const int feature_dim,
     const int input_stride) {
@@ -65,34 +20,58 @@ __global__ void index_to_pinned_kernel(
         int feat_idx = tid % feature_dim;
         
         int input_idx = indices[batch_idx];
-        input[input_idx * input_stride + feat_idx] = x[tid];
+        output[tid] = T(input[input_idx * input_stride + feat_idx]);
     }
 }
-// input[indices] = x
-void index_to_pinned(
+
+void index_to_cuda(
     const torch::Tensor& input,
     const torch::Tensor& indices,
-    const torch::Tensor& x) {
+    const torch::Tensor& output) {
     
     // Get dimensions
     int batch_size = indices.size(0);
     int feature_dim = input.size(1);
     int input_stride = input.stride(0);
-        
+    
+    
     // Calculate grid and block sizes
     const int threads_per_block = 256;
     const int blocks = (batch_size * feature_dim + threads_per_block - 1) / threads_per_block;
     
     // Launch kernel
-    index_to_pinned_kernel<<<blocks, threads_per_block>>>(
-        input.data_ptr<float>(),
-        indices.data_ptr<int>(),
-        x.data_ptr<float>(),
-        batch_size,
-        feature_dim,
-        input_stride
-    );
+    if (output.dtype() == torch::kFloat)
+        index_to_cuda_kernel<<<blocks, threads_per_block>>>(
+            input.data_ptr<float>(),
+            indices.data_ptr<int>(),
+            output.data_ptr<float>(),
+            batch_size,
+            feature_dim,
+            input_stride
+        );
+    else if (output.dtype() == torch::kHalf)
+        index_to_cuda_kernel<<<blocks, threads_per_block>>>(
+            input.data_ptr<float>(),
+            indices.data_ptr<int>(),
+            output.data_ptr<at::Half>(),
+            batch_size,
+            feature_dim,
+            input_stride
+        );
+    else if (output.dtype() == torch::kBFloat16)
+        index_to_cuda_kernel<<<blocks, threads_per_block>>>(
+            input.data_ptr<float>(),
+            indices.data_ptr<int>(),
+            output.data_ptr<at::BFloat16>(),
+            batch_size,
+            feature_dim,
+            input_stride
+        );
+    else
+        throw std::runtime_error("Unsupported output dtype");
+    
 }
+
 
 __global__ void adamw_kernel(
     float* __restrict__ weight_,
@@ -100,6 +79,7 @@ __global__ void adamw_kernel(
     float* __restrict__ exp_avg_,
     float* __restrict__ exp_avg_sq_,
     const int* __restrict__ indices,
+    float* __restrict__ output_weight,
     const int batch_size,
     const int feature_dim,
     const int input_stride,
@@ -118,6 +98,7 @@ __global__ void adamw_kernel(
         float exp_avg = exp_avg_[param_idx];
         float exp_avg_sq = exp_avg_sq_[param_idx];
         float weight = weight_[param_idx];
+        output_weight[tid] = weight;
 
         exp_avg += _beta1 * (grad - exp_avg);
         exp_avg_sq += _beta2 * (grad * grad - exp_avg_sq);
@@ -135,6 +116,7 @@ void adamw(
     const torch::Tensor& exp_avg,
     const torch::Tensor& exp_avg_sq,
     const torch::Tensor& indices,
+    const torch::Tensor& output_weight,
     const float lr,
     const float beta1,
     const float beta2,
@@ -158,6 +140,7 @@ void adamw(
         exp_avg.data_ptr<float>(),
         exp_avg_sq.data_ptr<float>(),
         indices.data_ptr<int>(),
+        output_weight.data_ptr<float>(),
         batch_size,
         feature_dim,
         input_stride,

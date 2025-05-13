@@ -77,8 +77,8 @@ class SparseEmbedding(nn.Module):
     @torch.no_grad()
     def apply_gradients_hook(self, grad: torch.Tensor = None):
         if not self.not_ddp:
-            dist.barrier()
-            torch.cuda.synchronize()
+            dist.barrier() # TODO ?
+            torch.cuda.synchronize() # TODO ?
             gather_list = [torch.empty_like(grad) for _ in range(self.world_size)] if self.is_main else None
             dist.gather(grad.contiguous(), gather_list, dst=self.src_rank) # https://github.com/pytorch/pytorch/issues/73515 gather的输入必须是 contiguous
             if self.is_main:
