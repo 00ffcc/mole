@@ -1,10 +1,11 @@
 import torch
 from torch import nn
 from mole.dist_embed.embed import SparseEmbedding
+from mole.dist_embed.embed_bag import SparseEmbeddingBag
 
 class PKM(nn.Module):
 
-    def __init__(self, config, values: SparseEmbedding = None):
+    def __init__(self, config):
 
         super().__init__()
 
@@ -20,14 +21,21 @@ class PKM(nn.Module):
         assert self.k_dim >= 2 and self.k_dim % 2 == 0
         
         # 避免注册为子模块
-        self.values = [values if values is not None else
-                       SparseEmbedding(
+        self.values = [
+                        SparseEmbeddingBag(
                            num_embeddings         = self.size, 
                            embedding_dim          = self.v_dim, 
                            optimizer_params       = config.optimizer_params, 
                            std                    = self.v_dim ** -0.5, 
                            embedding_output_dtype = config.embedding_output_dtype
-                       )] 
+                       )] if config.use_embedding_bag else [
+                        SparseEmbedding(
+                           num_embeddings         = self.size, 
+                           embedding_dim          = self.v_dim, 
+                           optimizer_params       = config.optimizer_params, 
+                           std                    = self.v_dim ** -0.5, 
+                           embedding_output_dtype = config.embedding_output_dtype
+                       )]
 
         # query network
         self.query_proj = nn.Linear(self.input_dim, self.heads * self.k_dim, bias=True)
@@ -86,8 +94,11 @@ class PKM(nn.Module):
         scores = scores.view(-1, self.heads * self.knn)
 
         # weighted sum of values
-        output = self.values[0](indices)
-        output = (output * scores.unsqueeze(-1)).sum(dim=-2)
+        if isinstance(self.values[0], SparseEmbedding):
+            output = self.values[0](indices)
+            output = (output * scores.unsqueeze(-1)).sum(dim=-2)
+        else:
+            output = self.values[0](indices, scores)
 
         return output.view(prefix_shape + (self.v_dim,))
     

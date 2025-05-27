@@ -20,7 +20,7 @@ args, _ = arf.parse_known_args()
 def _timer(name: str, timing_raw):
     with Timer(name=name, logger=None) as timer:
         yield
-        torch.cuda.synchronize()
+        torch.cuda.synchronize() # TODO
     timing_raw[name] = timer.last
 
 profile_kwargs = ProfileKwargs(
