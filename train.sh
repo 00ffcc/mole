@@ -5,4 +5,4 @@ export HUGGINGFACE_HUB_CACHE="/NAS/wujunkang/guizhiyu/cache"
 export TOKENIZERS_PARALLELISM=false
 export HF_ENDPOINT=https://hf-mirror.com
 export CUDA_VISIBLE_DEVICES=5,6
-accelerate launch --config_file ./config/zero2.json train.py --model_config_path ./config/160m_offload.json
+accelerate launch --config_file ./config/zero2.json trainer/train.py --model_config_path ./config/160m_offload.json

@@ -33,3 +33,5 @@ log
 data.json
 *.jsonl
 wandb
+test.*
+test
