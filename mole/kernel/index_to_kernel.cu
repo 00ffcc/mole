@@ -115,10 +115,10 @@ void index_to_pinned(
         input_stride
     );
 }
-
+template <typename T>
 __global__ void adamw_kernel(
     float* __restrict__ weight_,
-    const float* __restrict__ grad_,
+    const T* __restrict__ grad_,
     float* __restrict__ exp_avg_,
     float* __restrict__ exp_avg_sq_,
     const int* __restrict__ indices,
@@ -174,19 +174,54 @@ void adamw(
     const int blocks = (batch_size * feature_dim + threads_per_block - 1) / threads_per_block;
     
     // Launch kernel
-    adamw_kernel<<<blocks, threads_per_block>>>(
-        weight.data_ptr<float>(),
-        grad.data_ptr<float>(),
-        exp_avg.data_ptr<float>(),
-        exp_avg_sq.data_ptr<float>(),
-        indices.data_ptr<int>(),
-        batch_size,
-        feature_dim,
-        input_stride,
-        lr,
-        1 - beta1,
-        1 - beta2,
-        weight_decay,
-        eps
-    );
+    if (grad.dtype() == torch::kFloat)
+        adamw_kernel<<<blocks, threads_per_block>>>(
+            weight.data_ptr<float>(),
+            grad.data_ptr<float>(),
+            exp_avg.data_ptr<float>(),
+            exp_avg_sq.data_ptr<float>(),
+            indices.data_ptr<int>(),
+            batch_size,
+            feature_dim,
+            input_stride,
+            lr,
+            1 - beta1,
+            1 - beta2,
+            weight_decay,
+            eps
+        );
+    else if (grad.dtype() == torch::kHalf)
+        adamw_kernel<<<blocks, threads_per_block>>>(
+            weight.data_ptr<float>(),
+            grad.data_ptr<at::Half>(),
+            exp_avg.data_ptr<float>(),
+            exp_avg_sq.data_ptr<float>(),
+            indices.data_ptr<int>(),
+            batch_size,
+            feature_dim,
+            input_stride,
+            lr,
+            1 - beta1,
+            1 - beta2,
+            weight_decay,
+            eps
+        );
+    else if (grad.dtype() == torch::kBFloat16)
+        adamw_kernel<<<blocks, threads_per_block>>>(
+            weight.data_ptr<float>(),
+            grad.data_ptr<at::BFloat16>(),
+            exp_avg.data_ptr<float>(),
+            exp_avg_sq.data_ptr<float>(),
+            indices.data_ptr<int>(),
+            batch_size,
+            feature_dim,
+            input_stride,
+            lr,
+            1 - beta1,
+            1 - beta2,
+            weight_decay,
+            eps
+        );
+    else
+        throw std::runtime_error("Unsupported grad dtype");
 }

@@ -105,6 +105,7 @@ class SparseEmbeddingFunc(torch.autograd.Function):
             grad_output.shape[0], 
             calc_local_dim(config.embedding_dim, config.world_size, config.local_rank),
             device=grad_output.device,
+            dtype=grad_output.dtype,
         ) for _ in range(config.world_size)]
 
         dist.all_to_all(output_list, scatter_list)

@@ -22,7 +22,8 @@ norm_type: pre
 
 # ple config
 ple_dim: 64
-ple_layer_ids: [0, 1, 2, 3, 4, 5]
+# ple_layer_ids: [0, 1, 2, 3, 4, 5]
+ple_layer_ids: []
 optimizer_params:
   beta1: 0.9
   beta2: 0.999
