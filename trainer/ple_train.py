@@ -47,7 +47,7 @@ model = PLELM(lmconfig)
 
 tokenizer = AutoTokenizer.from_pretrained(config['tokenizer_path'])
 
-dataset = PretrainDataset(tokenizer, max_length=config['max_length'])
+dataset = PretrainDataset(tokenizer, max_length=config['max_length'], dataset_name_or_path=config['dataset_name_or_path'])
 dataloader = DataLoader(dataset, batch_size=config['batch_size'] // accelerator.num_processes)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=config['max_lr'], weight_decay=config['weight_decay'])

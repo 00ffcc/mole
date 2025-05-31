@@ -2,12 +2,12 @@ from torch.utils.data import Dataset, IterableDataset
 from datasets import load_dataset
 
 class PretrainDataset(IterableDataset):
-    def __init__(self, tokenizer, max_length=2049):
+    def __init__(self, tokenizer, max_length=2049, dataset_name_or_path='pietrolesci/pile-deduped-pythia-preshuffled'):
         super().__init__()
         self.tokenizer = tokenizer
         self.tokenizer.pad_token = tokenizer.eos_token
         self.max_length = max_length
-        self.ds = load_dataset("pietrolesci/pile-deduped-pythia-preshuffled", "detokenized", split='train', streaming=True)
+        self.ds = load_dataset(dataset_name_or_path, "detokenized", split='train', streaming=True)
     def __iter__(self):
         for sample in self.ds:
             # 构建输入文本

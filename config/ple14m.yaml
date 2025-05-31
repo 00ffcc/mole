@@ -22,8 +22,8 @@ norm_type: pre
 
 # ple config
 ple_dim: 64
-# ple_layer_ids: [0, 1, 2, 3, 4, 5]
-ple_layer_ids: []
+ple_layer_ids: [0, 1, 2, 3, 4, 5]
+# ple_layer_ids: []
 optimizer_params:
   beta1: 0.9
   beta2: 0.999
@@ -42,4 +42,5 @@ checkpoint_steps: 1000
 max_lr: 1.0e-3
 weight_decay: 0.0001
 max_samples: 4770000
+dataset_name_or_path: /NAS/wujunkang/guizhiyu/cache/datasets--pietrolesci--pile-deduped-pythia-preshuffled/snapshots/1b0c5082e922b45a3f937fa42934a91fc462e245
 

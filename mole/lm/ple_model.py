@@ -362,6 +362,7 @@ class PLELM(PreTrainedModel):
 
         if not self.config.offload_tok_embbedings:
             h = self.tok_embeddings(input_ids)
+            layer_embed_dict = {}
         else:
             embed = self.embeddings[0](input_ids)
             # 按最后一维分片

@@ -81,7 +81,6 @@ class SparseEmbeddingFunc(torch.autograd.Function):
         unique_indices = unique_indices.to(torch.int32)
         ctx.save_for_backward(weight, exp_avgs, exp_avg_sqs, unique_indices, inverse)
         embeds = torch.empty(unique_indices.shape + (weight.shape[-1],), dtype=config.dtype, device=unique_indices.device)
-        print(weight.dtype, unique_indices.dtype, embeds.dtype)
         index_to_kernel.index_to_cuda(weight, unique_indices, embeds)
         embeds = embeds[inverse].view(indices.shape + (weight.shape[-1],))
         return embeds
@@ -178,7 +177,7 @@ class SparseEmbedding(nn.Module):
             local_dim = embedding_dim
 
         self.weight = torch.nn.parameter.Parameter(torch.empty((num_embeddings, local_dim), device='cpu', pin_memory=True, requires_grad=True))
-        nn.init.normal_(self.weight, std=std)
+        nn.init.normal_(self.weight, std=std, generator=torch.Generator().manual_seed(local_rank))
 
         self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
         self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
