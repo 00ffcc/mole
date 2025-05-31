@@ -1,9 +1,9 @@
-dim: 128
+dim: 512
 n_layers: 6
-n_heads: 4
-n_kv_heads: 2
+n_heads: 8
+n_kv_heads: 4
 vocab_size: 50304
-hidden_dim: 512
+hidden_dim: 2048
 norm_eps: 1.0e-5
 max_seq_len: 2048
 rope_theta: 10000
@@ -21,16 +21,16 @@ norm_topk_prob: true
 norm_type: pre
 
 # ple config
-ple_dim: 128
-ple_layer_ids: [0, 1, 2, 3, 4, 5]
-# ple_layer_ids: []
+ple_dim: 256
+# ple_layer_ids: [0, 1, 2, 3, 4, 5]
+ple_layer_ids: []
 optimizer_params:
   beta1: 0.9
   beta2: 0.999
   eps: 1.0e-8
   weight_decay: 0.0001
   grad_clip_max_norm: 1.0
-offload_tok_embbedings: true
+offload_tok_embbedings: false
 embedding_init_std: 1.0e-5
 
 # Training config

@@ -1,9 +1,9 @@
-dim: 128
-n_layers: 6
-n_heads: 4
-n_kv_heads: 2
+dim: 768
+n_layers: 12
+n_heads: 12
+n_kv_heads: 6
 vocab_size: 50304
-hidden_dim: 512
+hidden_dim: 3072
 norm_eps: 1.0e-5
 max_seq_len: 2048
 rope_theta: 10000
@@ -21,8 +21,8 @@ norm_topk_prob: true
 norm_type: pre
 
 # ple config
-ple_dim: 128
-ple_layer_ids: [0, 1, 2, 3, 4, 5]
+ple_dim: 384
+ple_layer_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 # ple_layer_ids: []
 optimizer_params:
   beta1: 0.9
@@ -40,7 +40,7 @@ max_length: 2049
 batch_size: 8
 warmup_steps: 300
 checkpoint_steps: 1000
-max_lr: 1.0e-3
+max_lr: 0.6e-3
 weight_decay: 0.0001
 max_samples: 4770000
 dataset_name_or_path: /NAS/wujunkang/guizhiyu/cache/datasets--pietrolesci--pile-deduped-pythia-preshuffled/snapshots/1b0c5082e922b45a3f937fa42934a91fc462e245

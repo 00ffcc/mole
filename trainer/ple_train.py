@@ -59,7 +59,13 @@ if accelerator.is_local_main_process:
     config['offloaded_params'] = embedding_dim * lmconfig.vocab_size
     config['embedding_dim'] = embedding_dim
 
-    import wandb
+    if config['log_backend'] == 'wandb':
+        import wandb as wandb
+    elif config['log_backend'] == 'swanlab':
+        import swanlab as wandb
+    else:
+        raise ValueError('Unsupported log backend')
+    
     import datetime
     name = f"{config['norm_type']}-a{config['activated_params']//1000000}m-o{config['offloaded_params']//1000000}m-{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     wandb.init(project="ple-lm", name=name, config=config)
