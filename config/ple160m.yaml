@@ -18,10 +18,10 @@ scoring_func: softmax
 aux_loss_alpha: 0.1
 seq_aux: true
 norm_topk_prob: true
-norm_type: pre
+arch: deepembed # pre, post, deepembed
 
 # ple config
-ple_dim: 384
+ple_dim: 768
 ple_layer_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 # ple_layer_ids: []
 optimizer_params:
@@ -32,6 +32,7 @@ optimizer_params:
   grad_clip_max_norm: 1.0
 offload_tok_embbedings: true
 embedding_init_std: 1.0e-5
+params_dtype: bf16 # embedding参数的类型 [fp32, bf16]
 
 # Training config
 is_profile: false

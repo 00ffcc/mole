@@ -67,7 +67,7 @@ if accelerator.is_local_main_process:
         raise ValueError('Unsupported log backend')
     
     import datetime
-    name = f"{config['norm_type']}-a{config['activated_params']//1000000}m-o{config['offloaded_params']//1000000}m-{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    name = f"{config['arch']}-a{config['activated_params']//1000000}m-o{config['offloaded_params']//1000000}m-{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     wandb.init(project="ple-lm", name=name, config=config)
 
 scheduler = LinearWarmupCosineAnnealingLR(optimizer, num_warmup_steps=config['warmup_steps'], num_training_steps=config['max_steps'])

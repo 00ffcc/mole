@@ -160,10 +160,26 @@ class SparseEmbedding(nn.Module):
                  embedding_dim: int, 
                  optimizer_params: dict,
                  std: float = 0.01,
-                 embedding_output_dtype: torch.dtype = torch.float32,
+                 embedding_output_dtype: torch.dtype | str = torch.float32,
+                 params_dtype: torch.dtype | str = torch.float32,
                  **kwargs,
                  ):
         super().__init__()
+
+        str2dtype = {
+            "float32" : torch.float32,
+            "bfloat16": torch.bfloat16,
+            "fp32"    : torch.float32,
+            "bf16"    : torch.bfloat16,
+        }
+        if isinstance(embedding_output_dtype, str):
+            if embedding_output_dtype.lower() not in str2dtype:
+                raise ValueError(f"Unsupported dtype: {embedding_output_dtype}")
+            embedding_output_dtype = str2dtype[embedding_output_dtype.lower()]
+        if isinstance(params_dtype, str):
+            if params_dtype.lower() not in str2dtype:
+                raise ValueError(f"Unsupported dtype: {params_dtype}")
+            params_dtype = str2dtype[params_dtype.lower()]
 
         if dist.is_available() and dist.is_initialized():
             local_rank = dist.get_rank()
@@ -176,11 +192,11 @@ class SparseEmbedding(nn.Module):
             ddp = False
             local_dim = embedding_dim
 
-        self.weight = torch.nn.parameter.Parameter(torch.empty((num_embeddings, local_dim), device='cpu', pin_memory=True, requires_grad=True))
+        self.weight = torch.nn.parameter.Parameter(torch.empty((num_embeddings, local_dim), device='cpu', pin_memory=True, requires_grad=True, dtype=params_dtype))
         nn.init.normal_(self.weight, std=std, generator=torch.Generator().manual_seed(local_rank))
 
-        self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
-        self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True)
+        self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True, dtype=params_dtype)
+        self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True, dtype=params_dtype)
         
         self.config = SimpleNamespace(
             embedding_dim=embedding_dim,

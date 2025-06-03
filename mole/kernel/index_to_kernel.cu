@@ -4,9 +4,9 @@
 
 // CUDA kernel for indexing pinned memory
 // pin_memory to CUDA
-template <typename T>
+template <typename T, typename Tp>
 __global__ void index_to_cuda_kernel(
-    const float* __restrict__ input,
+    const Tp* __restrict__ input,
     const int* __restrict__ indices,
     T* __restrict__ output,
     const int batch_size,
@@ -40,7 +40,7 @@ void index_to_cuda(
     const int blocks = (batch_size * feature_dim + threads_per_block - 1) / threads_per_block;
     
     // Launch kernel
-    if (output.dtype() == torch::kFloat)
+    if (output.dtype() == torch::kFloat && input.dtype() == torch::kFloat)
         index_to_cuda_kernel<<<blocks, threads_per_block>>>(
             input.data_ptr<float>(),
             indices.data_ptr<int>(),
@@ -49,16 +49,7 @@ void index_to_cuda(
             feature_dim,
             input_stride
         );
-    else if (output.dtype() == torch::kHalf)
-        index_to_cuda_kernel<<<blocks, threads_per_block>>>(
-            input.data_ptr<float>(),
-            indices.data_ptr<int>(),
-            output.data_ptr<at::Half>(),
-            batch_size,
-            feature_dim,
-            input_stride
-        );
-    else if (output.dtype() == torch::kBFloat16)
+    else if (output.dtype() == torch::kBFloat16 && input.dtype() == torch::kFloat)
         index_to_cuda_kernel<<<blocks, threads_per_block>>>(
             input.data_ptr<float>(),
             indices.data_ptr<int>(),
@@ -67,8 +58,17 @@ void index_to_cuda(
             feature_dim,
             input_stride
         );
+    else if (output.dtype() == torch::kBFloat16 && input.dtype() == torch::kBFloat16)
+        index_to_cuda_kernel<<<blocks, threads_per_block>>>(
+            input.data_ptr<at::BFloat16>(),
+            indices.data_ptr<int>(),
+            output.data_ptr<at::BFloat16>(),
+            batch_size,
+            feature_dim,
+            input_stride
+        );
     else
-        throw std::runtime_error("Unsupported output dtype");
+        throw std::runtime_error("Unsupported dtype\n Supported dtypes: [fp32->fp32, fp32->bf16, bf16->bf16]");
     
 }
 // CUDA to pin_memory
@@ -115,12 +115,12 @@ void index_to_pinned(
         input_stride
     );
 }
-template <typename T>
+template <typename T, typename Tp>
 __global__ void adamw_kernel(
-    float* __restrict__ weight_,
+    Tp* __restrict__ weight_,
     const T* __restrict__ grad_,
-    float* __restrict__ exp_avg_,
-    float* __restrict__ exp_avg_sq_,
+    Tp* __restrict__ exp_avg_,
+    Tp* __restrict__ exp_avg_sq_,
     const int* __restrict__ indices,
     const int batch_size,
     const int feature_dim,
@@ -174,7 +174,7 @@ void adamw(
     const int blocks = (batch_size * feature_dim + threads_per_block - 1) / threads_per_block;
     
     // Launch kernel
-    if (grad.dtype() == torch::kFloat)
+    if (grad.dtype() == torch::kFloat && weight.dtype() == torch::kFloat)
         adamw_kernel<<<blocks, threads_per_block>>>(
             weight.data_ptr<float>(),
             grad.data_ptr<float>(),
@@ -190,10 +190,10 @@ void adamw(
             weight_decay,
             eps
         );
-    else if (grad.dtype() == torch::kHalf)
+    else if (grad.dtype() == torch::kBFloat16 && weight.dtype() == torch::kFloat)
         adamw_kernel<<<blocks, threads_per_block>>>(
             weight.data_ptr<float>(),
-            grad.data_ptr<at::Half>(),
+            grad.data_ptr<at::BFloat16>(),
             exp_avg.data_ptr<float>(),
             exp_avg_sq.data_ptr<float>(),
             indices.data_ptr<int>(),
@@ -206,12 +206,12 @@ void adamw(
             weight_decay,
             eps
         );
-    else if (grad.dtype() == torch::kBFloat16)
+    else if (grad.dtype() == torch::kBFloat16 && weight.dtype() == torch::kBFloat16)
         adamw_kernel<<<blocks, threads_per_block>>>(
-            weight.data_ptr<float>(),
+            weight.data_ptr<at::BFloat16>(),
             grad.data_ptr<at::BFloat16>(),
-            exp_avg.data_ptr<float>(),
-            exp_avg_sq.data_ptr<float>(),
+            exp_avg.data_ptr<at::BFloat16>(),
+            exp_avg_sq.data_ptr<at::BFloat16>(),
             indices.data_ptr<int>(),
             batch_size,
             feature_dim,

@@ -279,16 +279,16 @@ class Block(nn.Module):
         self.ffn_norm = RMSNorm(config.dim, eps=config.norm_eps)
         self.feed_forward = FeedForward(config) if not config.use_moe else MOEFeedForward(config)
 
-        self.norm_type = config.norm_type # pre or post
+        self.arch = config.arch # pre, post, deepembed(pre-norm with rwkv8 deepembed)
 
-        if layer_id in config.ple_layer_ids:
+        if layer_id in config.ple_layer_ids and self.arch in ['post', 'pre']:
             self.per_layer_gate = nn.Linear(config.dim, config.ple_dim, bias=False)
             self.per_layer_proj = nn.Linear(config.ple_dim, config.dim, bias=False)
             self.per_layer_norm = nn.LayerNorm(config.dim)
 
 
     def forward(self, x, pos_cis, past_key_value=None, use_cache=False, per_layer_emb=None):
-        if self.norm_type == 'post':
+        if self.arch == 'post':
             x = self.attention_norm(x)
             h_attn, past_kv = self.attention(
                 x,
@@ -305,7 +305,7 @@ class Block(nn.Module):
                 per_layer_out = self.per_layer_norm(per_layer_out)
                 h = h + per_layer_out
             return h, past_kv
-        elif self.norm_type == 'pre':
+        elif self.arch == 'pre':
             h_attn, past_kv = self.attention(
                 self.attention_norm(x),
                 pos_cis,
@@ -318,10 +318,25 @@ class Block(nn.Module):
                 gate = F.gelu(self.per_layer_gate(h))
                 per_layer_out = self.per_layer_proj(gate * per_layer_emb)
                 per_layer_out = self.per_layer_norm(per_layer_out) # TODO ?
+                # gate = F.gelu(self.per_layer_gate(self.per_layer_norm(h)))
+                # per_layer_out = self.per_layer_proj(gate * per_layer_emb)
                 h = h + per_layer_out
             return h, past_kv
+        elif self.arch == 'deepembed':
+            h_attn, past_kv = self.attention(
+                self.attention_norm(x),
+                pos_cis,
+                past_key_value=past_key_value,
+                use_cache=use_cache
+            )
+            h = x + h_attn
+            if per_layer_emb is not None:
+                h = h + self.feed_forward(self.ffn_norm(h)) * per_layer_emb
+            else:
+                h = h + self.feed_forward(self.ffn_norm(h))
+            return h, past_kv
         else:
-            raise ValueError(f'Unsupported norm_type: {self.norm_type}')
+            raise ValueError(f'Unsupported arch: {self.arch}')
 
 
 class PLELM(PreTrainedModel):
@@ -345,7 +360,8 @@ class PLELM(PreTrainedModel):
                                             embedding_dim          = embedding_dim,
                                             optimizer_params       = config.optimizer_params,
                                             std                    = config.embedding_init_std,
-                                            embedding_output_dtype = config.embedding_output_dtype
+                                            embedding_output_dtype = config.embedding_output_dtype,
+                                            params_dtype           = config.params_dtype,
                                         )]
         self.register_buffer("pos_cis",
                              precompute_pos_cis(dim=config.dim // config.n_heads, theta=config.rope_theta),

@@ -61,12 +61,12 @@ if __name__ == "__main__":
     torch.cuda.set_device(device=device)
     epoch = 40
     if True:
-        dtype = torch.float32
+        dtype = torch.bfloat16
         # Create input tensor in pinned memory
         num = 1024*1024
         batch_size = 16*2048*8
         dim = 256
-        a = torch.randn(num, dim, dtype=torch.float32)
+        a = torch.randn(num, dim, dtype=torch.bfloat16)
         a_pinned = a.pin_memory()
         
         # Create indices tensor on GPU
@@ -74,7 +74,7 @@ if __name__ == "__main__":
         b = torch.unique(b, sorted=True)
         print(f"Unique indices: {b.shape}")
         # Benchmark
-        for k in [-1, 1, 32, 64, 128, 256]:
+        for k in [-1]:
             if k != -1:
                 index_to_kernel = load(name='index_to_kernel', 
                             sources=[
@@ -87,7 +87,7 @@ if __name__ == "__main__":
                             )
                 
             # Use our optimized kernel
-            result = index_to_cuda(a_pinned, b)
+            result = index_to_cuda(a_pinned, b, dtype=dtype)
             
             # Compare with naive implementation
             naive_result = a_pinned[b.cpu()].to(b.device)
