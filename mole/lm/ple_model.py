@@ -407,7 +407,7 @@ class PLELM(PreTrainedModel):
     
     def update_lr(self, new_lr):
         if hasattr(self, 'embeddings'):
-            self.embeddings[0].lr = new_lr
+            self.embeddings[0].config.lr = new_lr
 
 if __name__ == '__main__':
     import yaml

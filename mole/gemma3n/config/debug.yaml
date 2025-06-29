@@ -1,0 +1,47 @@
+model:
+  arch: ple
+  activation_sparsity_pattern: null
+  altup_active_idx: 0
+  altup_coef_clip: 120.0
+  altup_correct_scale: true
+  altup_lr_multiplier: 1.0
+  altup_num_inputs: 1
+  attention_bias: false
+  attention_dropout: 0.0
+  final_logit_softcapping: 30.0
+  head_dim: 256
+  hidden_activation: gelu_pytorch_tanh
+  hidden_size: 256
+  hidden_size_per_layer_input: 64
+  initializer_range: 0.02
+  intermediate_size: 256
+  laurel_rank: 64
+  layer_types: null
+  max_position_embeddings: 32768
+  num_attention_heads: 2
+  num_hidden_layers: 2
+  num_key_value_heads: 2
+  num_kv_shared_layers: 0
+  query_pre_attn_scalar: 256
+  rms_norm_eps: 1e-06
+  rope_local_base_freq: 10000.0
+  rope_scaling: null
+  rope_theta: 1000000.0
+  sliding_window: 512
+  torch_dtype: bfloat16
+  use_cache: true
+  vocab_size: 262400
+  vocab_size_per_layer_input: 262144
+
+
+is_profile: false
+tokenizer_name_or_path: EleutherAI/pythia-70m-deduped
+max_length: 2049
+batch_size_per_device: 8
+warmup_steps: 300
+checkpoint_steps: 1000
+max_lr: 1.0e-3
+weight_decay: 0.0001
+max_steps: 1000000
+dataset_name_or_path: /NAS/wujunkang/guizhiyu/cache/datasets--pietrolesci--pile-deduped-pythia-preshuffled/snapshots/1b0c5082e922b45a3f937fa42934a91fc462e245
+log_backend: swanlab # wandb or swanlab
