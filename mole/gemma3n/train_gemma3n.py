@@ -5,7 +5,6 @@ from codetiming import Timer
 from torch.utils.data import DataLoader
 import json
 import yaml
-import os
 from mole.gemma3n.modeling_gemma3n import Gemma3nForCausalLM, Gemma3nTextConfig
 from mole.lm.dataset import PretrainDataset
 from transformers import AutoTokenizer
@@ -30,12 +29,11 @@ profile_kwargs = ProfileKwargs(
 )
 accelerator = Accelerator(kwargs_handlers=[profile_kwargs])
 
-pwd = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(pwd, args.model_config_path), 'r') as f:
+with open(args.model_config_path, 'r') as f:
     if args.model_config_path.endswith('.json'):
         config = json.load(f)
     elif args.model_config_path.endswith('.yaml'):
-        config = yaml.full_load(f)
+        config = yaml.safe_load(f)
     config = SimpleNamespace(**config)
     
 lmconfig = Gemma3nTextConfig(**config.model)
@@ -58,8 +56,8 @@ if accelerator.is_local_main_process:
         import swanlab as wandb
     
     import datetime
-    name = f"{config.model.arch}-a{config.activated_params//1000000}m-{datetime.datetime.now().strftime('%m%d%H%M')}"
-    wandb.init(project="ple-lm", name=name, config=config.to_dict())
+    name = f"{lmconfig.arch}-a{config.activated_params//1000000}m-{datetime.datetime.now().strftime('%m%d%H%M')}"
+    wandb.init(project=config.project, name=name, config=config.__dict__)
 
 scheduler = LinearWarmupCosineAnnealingLR(optimizer, num_warmup_steps=config.warmup_steps, num_training_steps=config.max_steps)
 
@@ -89,8 +87,8 @@ with accelerator.profile() if config.is_profile else nullcontext() as prof:
                 wandb.log({
                         'loss': loss.item(),
                         'config/lr': optimizer.param_groups[0]['lr'],
+                        'config/tokens': step * config.batch_size_per_device * config.max_length * accelerator.num_processes,
                     }, step=step)
                 for k, v in time_raw.items():
                     wandb.log({f'timing/{k}': v}, step=step)
-
-
+                print(f"loss: {loss.item()}")

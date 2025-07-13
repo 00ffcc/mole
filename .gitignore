@@ -35,3 +35,4 @@ data.json
 wandb
 test.*
 test
+tokenizer

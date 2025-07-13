@@ -183,6 +183,10 @@ class Gemma3nTextConfig(PretrainedConfig):
         activation_sparsity_pattern (Sequence[float], *optional*, defaults to `(0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)`):
             The sparsity factor used to extract the top-k activations for a given layer. The provided Sequence must
             explicitly provide a sparsity value for each layer in the model.
+        arch (`str`, *optional*, defaults to `"ple"`):
+            The architecture of the model. 
+            ple: per-layer embeddings from gemma3n
+            deepemb: deep embedding from RWKV8
 
     ```python
     >>> from transformers import Gemma3nTextModel, Gemma3nTextConfig
@@ -249,6 +253,7 @@ class Gemma3nTextConfig(PretrainedConfig):
         num_kv_shared_layers: int = 15,
         laurel_rank: int = 64,
         activation_sparsity_pattern: Optional[Union[float, Sequence[float]]] = (0.95,) * 10 + (0.0,) * 25,
+        arch: str = 'ple',
         **kwargs,
     ):
         super().__init__(
@@ -319,6 +324,7 @@ class Gemma3nTextConfig(PretrainedConfig):
                 f"Expected {num_hidden_layers} values but got {len_asp}."
             )
         self.activation_sparsity_pattern = activation_sparsity_pattern
+        self.arch = arch
 
 @dataclass
 @auto_docstring(
@@ -619,6 +625,39 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
+def eager_attention_forward(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    dropout: float = 0.0,
+    scaling: Optional[float] = None,
+    softcap: Optional[float] = None,
+    **kwargs,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if scaling is None:
+        scaling = module.head_dim**-0.5
+
+    key_states = repeat_kv(key, module.num_key_value_groups)
+    value_states = repeat_kv(value, module.num_key_value_groups)
+
+    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
+
+    if softcap is not None:
+        attn_weights = attn_weights / softcap
+        attn_weights = torch.tanh(attn_weights)
+        attn_weights = attn_weights * softcap
+    if attention_mask is not None:  # no matter the length, we just slice it
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
+        attn_weights = attn_weights + causal_mask
+
+    # upcast attention to fp32
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+    attn_output = torch.matmul(attn_weights, value_states)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    return attn_output, attn_weights
 
 def apply_rotary_pos_emb(
     x: torch.Tensor,
@@ -746,7 +785,9 @@ class Gemma3nTextAttention(nn.Module):
             }
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        attention_interface: Callable = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        attention_interface: Callable = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -784,9 +825,12 @@ class Gemma3nTextDecoderLayer(GradientCheckpointingLayer):
 
         self.altup = Gemma3nTextAltUp(config)
         self.laurel = Gemma3nTextLaurelBlock(config)
-        self.per_layer_input_gate = nn.Linear(self.hidden_size, self.hidden_size_per_layer_input, bias=False)
-        self.per_layer_projection = nn.Linear(self.hidden_size_per_layer_input, self.hidden_size, bias=False)
-        self.post_per_layer_input_norm = Gemma3nRMSNorm(self.hidden_size, eps=config.rms_norm_eps)
+
+        self.arch = config.arch
+        if self.arch == 'ple':
+            self.per_layer_input_gate = nn.Linear(self.hidden_size, self.hidden_size_per_layer_input, bias=False)
+            self.per_layer_projection = nn.Linear(self.hidden_size_per_layer_input, self.hidden_size, bias=False)
+            self.post_per_layer_input_norm = Gemma3nRMSNorm(self.hidden_size, eps=config.rms_norm_eps)
 
     @deprecate_kwarg("last_cache_position", version="4.53.0")
     def forward(
@@ -842,15 +886,18 @@ class Gemma3nTextDecoderLayer(GradientCheckpointingLayer):
         if self.config.altup_correct_scale:
             first_prediction = self.altup.scale_corrected_output(first_prediction_clone)
 
-        # per_layer_input_gate adapted from jax.numpy.einsum("btd,dp->btp", ...)
-        first_prediction = self.per_layer_input_gate(first_prediction)
-        first_prediction = self.act_fn(first_prediction)
-        first_prediction = torch.multiply(first_prediction, per_layer_input)
+        if self.arch == 'ple':
+            # per_layer_input_gate adapted from jax.numpy.einsum("btd,dp->btp", ...)
+            first_prediction = self.per_layer_input_gate(first_prediction)
+            print(f"gate.norm: {first_prediction.norm().item()}")
+            first_prediction = self.act_fn(first_prediction)
+            first_prediction = torch.multiply(first_prediction, per_layer_input)
 
-        # per_layer_projection adapted from jax.numpy.einsum("btp,pd->btd", ...)
-        first_prediction = self.per_layer_projection(first_prediction)
-        first_prediction = self.post_per_layer_input_norm(first_prediction)
-        corrected_predictions[1:] += first_prediction
+            # per_layer_projection adapted from jax.numpy.einsum("btp,pd->btd", ...)
+            first_prediction = self.per_layer_projection(first_prediction)
+            first_prediction = self.post_per_layer_input_norm(first_prediction)
+            print(f"ple.norm: {per_layer_input.norm().item()}, first_prediction.norm: {first_prediction.norm().item()}, corr.norm: {corrected_predictions.norm().item()}")
+            corrected_predictions[1:] += first_prediction
 
         outputs = (corrected_predictions,)
 
@@ -1224,9 +1271,10 @@ class Gemma3nForCausalLM(Gemma3nPreTrainedModel, GenerationMixin):
         ```"""
 
         if self.training and self.config._attn_implementation != "eager":
+            # TODO: 是否要用eager?
             logger.warning_once(
                 "It is strongly recommended to train Gemma3n models with the `eager` attention implementation "
-                f"instead of `{self.config._attn_implementation}`. Use `eager` with `AutoModelForCausalLM.from_pretrained('<path-to-checkpoint>', attn_implementation='eager')`."
+                f"instead of `{self.config._attn_implementation}`. Use `eager` with `AutoModelForCausalLM.from_pretrained('<path-to-checkpoint>', attn_implementation='eager')`...? See https://huggingface.co/google/gemma-2-9b-it/discussions/9#667ebaf549c4138109bf96ff \n `softcap` is nolonger used in Gemma3n, so it should be compatible with flash-attention?"
             )
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
