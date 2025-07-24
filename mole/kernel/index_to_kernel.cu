@@ -144,7 +144,6 @@ __global__ void adamw_kernel(
         exp_avg += _beta1 * (grad - exp_avg);
         exp_avg_sq += _beta2 * (grad * grad - exp_avg_sq);
         weight -= lr * (weight_decay * weight + exp_avg / (sqrt(exp_avg_sq) + eps));
-
         weight_[param_idx] = weight;
         exp_avg_[param_idx] = exp_avg;
         exp_avg_sq_[param_idx] = exp_avg_sq;

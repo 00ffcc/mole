@@ -54,7 +54,7 @@ class SparseEmbeddingLayer:
         world_size = dist.get_world_size()
         
         local_emb_num = (num_embeddings - 1 - local_rank) // world_size + 1
-        self.weight = torch.empty((local_emb_num, embedding_dim), device='cpu', pin_memory=True, requires_grad=True, dtype=params_dtype)
+        self.weight = torch.empty((local_emb_num, embedding_dim), device='cpu', pin_memory=True, dtype=params_dtype)
         self.exp_avgs = torch.zeros_like(self.weight, device='cpu', pin_memory=True, dtype=params_dtype)
         self.exp_avg_sqs = torch.zeros_like(self.weight, device='cpu', pin_memory=True, dtype=params_dtype)
 
@@ -65,14 +65,11 @@ class SparseEmbeddingLayer:
         self.eps=optimizer_params.get("eps", 1e-8)
         self.grad_clip_max_norm=optimizer_params.get("grad_clip_max_norm", None)
 
-        self.stream = torch.cuda.Stream()
-    
     @torch.no_grad()
     def forward_1(self):
         '''
         all_to_all之前
         '''
-        print(f"global_unique_indices:{self.global_unique_indices}")
         embeds = torch.empty(
             self.global_unique_indices.shape + (self.weight.shape[-1],), 
             dtype=self.embedding_output_dtype, 
@@ -89,10 +86,9 @@ class SparseEmbeddingLayer:
             dtype=self.embedding_output_dtype,
             device=self.global_unique_indices.device,
         )
-        print(f"global_unique_embeds:{global_unique_embeds}")
         self.handle = dist.all_to_all_single(
             self.local_unique_embeds,
-            global_unique_embeds,
+            global_unique_embeds.contiguous(),
             output_split_sizes=self.output_length_per_rank,
             input_split_sizes=self.length_per_rank,
             async_op=True,
@@ -105,7 +101,6 @@ class SparseEmbeddingLayer:
         '''
         self.handle.wait()
         self.handle = None
-        print(f"local_unique_embeds:{self.local_unique_embeds}")
         embeds = self.local_unique_embeds[self.local_inverse].view(*self.local_indices_shape, -1)
 
         return embeds
@@ -121,9 +116,7 @@ class SparseEmbeddingLayer:
             dtype=grad_output.dtype,
             device=grad_output.device,
         )
-        print(f"local_inverse:{self.local_inverse}")
-        unique_grads.index_add_(0, self.local_inverse, grad_output.view(-1, C)) #
-        print(f"unique_grads:{unique_grads}")
+        unique_grads.index_add_(0, self.local_inverse, grad_output.reshape(-1, C))
         self.global_grads = torch.empty(
             (self.global_inverse.shape[0], C),
             dtype=grad_output.dtype,
@@ -150,7 +143,6 @@ class SparseEmbeddingLayer:
             device=self.global_grads.device,
         )
         global_unique_grads.index_add_(0, self.global_inverse, self.global_grads)
-        print(f"global_unique_grads:{global_unique_grads}")
 
         global_unique_grads = grad_clip(global_unique_grads, self.grad_clip_max_norm)
 
@@ -217,7 +209,6 @@ class SparseEmbedding:
         ]
         output_length_per_rank = [local_indices_per_rank[i].shape[0] for i in range(self.world_size)]
         local_indices_per_rank = torch.concat(local_indices_per_rank, dim=0)
-        print("local_indices_per_rank", local_indices_per_rank)
         mapping = torch.zeros(self.num_embeddings, dtype=torch.int32, device=local_indices.device)
         mapping[local_indices_per_rank] = torch.arange(local_indices_per_rank.shape[0], device=local_indices.device, dtype=torch.int32)
         local_inverse = mapping[local_indices]
@@ -238,33 +229,26 @@ class SparseEmbedding:
         按顺序调用
         '''
         if layer_idx == 0:
-            with torch.cuda.stream(self.layers[layer_idx].stream):
-                self.layers[layer_idx].forward_1()
+            self.layers[layer_idx].forward_1()
 
-        with torch.cuda.stream(self.layers[layer_idx].stream):
-            embeds = self.layers[layer_idx].forward_2()
+        embeds = self.layers[layer_idx].forward_2()
         
         if layer_idx < len(self.layers) - 1:
-            with torch.cuda.stream(self.layers[layer_idx+1].stream):
-                self.layers[layer_idx+1].forward_1()
+            self.layers[layer_idx+1].forward_1()
 
         def backward_hook(grad):
-            with torch.cuda.stream(self.layers[layer_idx].stream):
-                self.layers[layer_idx].backward_1(grad)
+            self.layers[layer_idx].backward_1(grad)
             if layer_idx < len(self.layers) - 1:
-                with torch.cuda.stream(self.layers[layer_idx+1].stream):
-                    self.layers[layer_idx+1].backward_2()
+                self.layers[layer_idx+1].backward_2()
             if layer_idx == 0:
-                with torch.cuda.stream(self.layers[layer_idx].stream):
-                    self.layers[layer_idx].backward_2()
-        
+                self.layers[layer_idx].backward_2()
         embeds.requires_grad_(True)
         embeds.register_hook(backward_hook)
 
         return embeds
     
     @torch.no_grad()
-    def update_lr(self, lr: float)
+    def update_lr(self, lr: float):
         for layer in self.layers:
             layer.lr = lr
 
@@ -274,34 +258,50 @@ if __name__ == "__main__":
     local_rank = dist.get_rank()
     world_size = dist.get_world_size()
 
-    NE = 2
-    C = 3
+    NE = 10
+    C = 2
     B = 1
-    N = 2
+    N = 10
 
     sparse_embedding = SparseEmbedding(
-        num_layers=2,
+        num_layers=1,
         num_embeddings=NE,
         embedding_dim=C,
         optimizer_params={
-            "lr": 1e-3,
+            "lr": 1e-2,
             "beta1": 0.9,
             "beta2": 0.999,
-            "weight_decay": 0.001,
-            "eps": 1e-8,
-            "grad_clip_max_norm": 1.0,
+            "weight_decay": 0.000,
+            "eps": 0,
+            "grad_clip_max_norm": None,
         },
         embedding_output_dtype=torch.float32,
         params_dtype=torch.float32,
     )
     # 重复c次
-    sparse_embedding.layers[0].weight = torch.arange(start=local_rank, end=NE, step=world_size, device=local_rank, dtype=torch.float32).repeat(C).view(-1, C)
+    #sparse_embedding.layers[0].weight = torch.arange(start=local_rank, end=NE, step=world_size, device=local_rank, dtype=torch.bfloat16).repeat(C).view(-1, C).contiguous()
+    #sparse_embedding.layers[1].weight = torch.arange(start=local_rank, end=NE, step=world_size, device=local_rank, dtype=torch.bfloat16).repeat(C).view(-1, C).contiguous() * 2
+    for i in range(NE//world_size):
+        for j in range(C):
+            #sparse_embedding.layers[0].weight[i, j] = i*world_size + local_rank
+            sparse_embedding.layers[0].weight[i, j] = 18
 
-    sparse_embedding.dispatch(torch.tensor([[0, 1], [1, 1]], device=local_rank, dtype=torch.int32))
+    sparse_embedding.dispatch(torch.tensor([0,1,2,3,4,5,6,7,8,9], device=local_rank, dtype=torch.int32))
 
     res0 = sparse_embedding.combine(0)
     print(res0)
-    res1 = sparse_embedding.combine(1)
+    #res1 = sparse_embedding.combine(1)
+    #print(res1)
 
-    res1.backward(torch.ones_like(res1))
+    #res1.backward(torch.ones_like(res1))
     res0.backward(torch.ones_like(res0))
+
+    print(sparse_embedding.layers[0].weight)
+    #print(sparse_embedding.layers[1].weight)
+    #sparse_embedding.dispatch(torch.tensor([0,1,2,3,4,5,6,7,8,9], device=local_rank, dtype=torch.int32))
+
+    #res0 = sparse_embedding.combine(0)
+    #print(res0)
+    #res1 = sparse_embedding.combine(1)
+    #print(res1)
+    #print(sparse_embedding.layers[0].we)

@@ -222,35 +222,22 @@ if __name__ == "__main__":
     from accelerate import Accelerator
     accelerator = Accelerator()
     NE = 10
-    C = 4
+    C = 2
     B = 10
     N = 4
-    class mymodel(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.embed = [
-                SparseEmbedding(NE, C, 
+    embed = SparseEmbedding(NE, C, 
                     optimizer_params = {
                         "lr": 1e-3,
                         "beta1": 0.9,
                         "beta2": 0.999,
-                        "weight_decay": 0.01,
-                        "eps": 1e-8,
+                        "weight_decay": 0.00,
+                        "eps": 0,
                     },
                 )
-            ]
-            self.linear = nn.Linear(C, 1)
-        def forward(self, indices):
-            return self.embed[0](indices)
-    embed = mymodel()
-    dataloader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.randint(0, NE, (B*10, N), dtype=torch.int32)), batch_size=B)
-    optimizer = torch.optim.Adam(embed.parameters(), lr=1e-3)
-    embed, dataloader, optimizer = accelerator.prepare(embed, dataloader, optimizer)
-
-    for indices in dataloader:
-        print(indices)
-        out = embed(indices[0])
-        print("out:", out)
-        loss = out.sum()
-        # loss.backward()
-        accelerator.backward(loss)
+    for i in range(NE):
+        embed.weight[i, 0]=i
+    res = embed(torch.tensor([0,1,2,3,4,5,6,7,8,9], dtype=torch.int32, device=accelerator.device))
+    print(res)
+    res.backward(torch.ones_like(res))
+    res = embed(torch.tensor([0,1,2,3,4,5,6,7,8,9], dtype=torch.int32, device=accelerator.device))
+    print(res)
